@@ -1619,10 +1619,13 @@ static void draw_prim(GeList &l, uint32_t data) {
         float qx0 = vv[0].x, qx1 = vv[0].x, qy0 = vv[0].y, qy1 = vv[0].y;
         for (int i = 1; i < 4; i++) { qx0 = std::min(qx0, vv[i].x); qx1 = std::max(qx1, vv[i].x); qy0 = std::min(qy0, vv[i].y); qy1 = std::max(qy1, vv[i].y); }
         modbox_quad(fb_base(), qx0, qy0, qx1, qy1);
+        extern bool mui_dump_on(void); extern void mui_quad(uint32_t, int, int, int, int, uint32_t); extern bool display_mouse_menus(void);
+        if (display_mouse_menus() || mui_dump_on()) mui_quad(fb_base(), (int)qx0, (int)qy0, (int)qx1, (int)qy1, tex_addr());   /* mouse: cartas 3D (mao do duelo) */
     }
     if (type == 6 && count >= 2 && !(count & 1) && t.through && textured) {   /* sprites 2D texturizados: o modulo do mouse acha barras de menu (2 vertices) e linhas de texto (varios sprites num PRIM) */
         extern bool display_mouse_menus(void); extern void mui_prim(uint32_t, int, int, int, int, float, float, float, float, uint32_t, uint32_t); extern void mui_run(uint32_t, int, int, int, int);
-        if (display_mouse_menus()) {
+        extern bool mui_dump_on(void);
+        if (display_mouse_menus() || mui_dump_on()) {
             if (count == 2) mui_prim(fb_base(), (int)vv[0].x, (int)vv[0].y, (int)vv[1].x, (int)vv[1].y, vv[0].u, vv[0].v, vv[1].u, vv[1].v, tex_addr(), vv[1].col);
             else { float a = vv[0].x, b = vv[0].y, c = a, d = b; for (uint32_t i = 1; i < count; i++) { a = std::min(a, vv[i].x); c = std::max(c, vv[i].x); b = std::min(b, vv[i].y); d = std::max(d, vv[i].y); } mui_run(fb_base(), (int)a, (int)b, (int)c, (int)d); }
         }

@@ -2,6 +2,38 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Mouse in menus: a click no longer confirms twice when the menu closes with an animation while the button is still held (the click
+  is owned by the mouse module until the button is released).
+- Mouse in menus: clicking an item and letting the mouse slip onto the next one confirms the item that was clicked.
+- Mouse in menus: right after the selection moves, the module waits for the highlight to catch up before confirming or correcting
+  (it could open the item before the one under the mouse).
+- Mouse in menus: a highlight that blinks or animates no longer makes the click confirm whatever was selected; the module waits for
+  the highlight to come back (plain X only if the selection stays unknown for 12 frames, as before).
+- Mouse in menus: moving the mouse inside the same item no longer restarts the navigation, and changing target never cuts a d-pad
+  press in half.
+- Mouse in menus: greyed-out items (e.g. Free Duel / Network Mode in the main menu early in the game) are skipped by the game's d-pad;
+  the module counted them as steps, overshot the target and the highlight kept jumping up and down. Greyed-out bars are now recognised
+  (by their style, and by learning which styles have ever been selected), not counted and not targeted; a click on one does nothing.
+- Very short clicks (shorter than the game's 2-frame input poll) are no longer lost: the window records every button-down and each
+  click stays pressed for at least 3 frames.
+- The click that only brings the window to the front is no longer sent to the game.
+- Mouse buttons follow the Windows "switch primary and secondary buttons" setting.
+- Clean builds (ISO only, no decompiler data) crashed when the title menu loaded: the decomp swaps call `sprintf`/`strlen` by import
+  name, and those names only exist in the maintainers' NID table. They are now done on the host when the import has no name.
+
+### Added
+- Mouse in menus now also works on **cards**: in Deck Edit (the grid of card thumbnails) and in a **duel** (your hand, your monsters
+  and Spell/Trap cards, the opponent's monsters, e.g. as attack targets), clicking a card moves the game's cursor there and selects it. Measured from F4 recordings: thumbnails 22x30 in a 28x34 grid with a 9-piece frame
+  cursor; hand and field cards are 3D quads drawn twice (shared frame texture + art) with a 32x32 pointer on the chosen one; on the field the
+  cursor changes row one step at a time (rows have gaps). Only clicks act there (hovering does not move the cursor,
+  because small windows on those screens also use the d-pad); if the cursor does not move (a window is open) nothing is confirmed.
+- **F4**: records what the game draws on each frame (2D sprites, text lines, 3D card quads) plus the buttons and the mouse, to
+  `logs/<session>_mouse.txt`, to develop mouse support for screens that are not lists (Deck Edit, duel).
+- `tools/teste_mouse/`: offline simulator and randomized test for the mouse module (no game or Windows needed).
+
 ## [0.3.0] - 2026-10-18
 
 ### Added

@@ -102,8 +102,49 @@ uint32_t SwapCtx::callNid(uint32_t nid, uint32_t a0, uint32_t a1, uint32_t a2, u
     psp_call(c, target);
     return c->r[2];
 }
+/* libc imports done on the host when the module's import has no name. The names of libc imports come from a NID table that only exists
+ * where the decompiler workflow was run (gen/ferramentas_decomp/dados/nids.tsv); a clean build from the ISO alone knows only the HLE names,
+ * so "sprintf"/"strlen" are not found by name. Without this the title menu built its archive path from an uninitialised buffer and crashed. */
+static bool host_libc(SwapCtx &x, const char *name, const uint32_t *a, uint32_t *result) {
+    if (!strcmp(name, "strlen")) { *result = (uint32_t)strlen((const char *)x.mem(a[0])); return true; }
+    if (strcmp(name, "sprintf")) return false;
+    const char *f = (const char *)x.mem(a[1]);
+    std::string out; int next = 2;   /* a[2..7] = the variadic arguments, as the guest passes them in registers */
+    auto arg = [&]() -> uint32_t { return next < 8 ? a[next++] : 0; };
+    while (*f) {
+        if (*f != '%') { out += *f++; continue; }
+        std::string spec = "%"; f++;
+        while (*f && strchr("-+ #0", *f)) spec += *f++;
+        if (*f == '*') { spec += std::to_string((int32_t)arg()); f++; } else while (*f >= '0' && *f <= '9') spec += *f++;
+        if (*f == '.') { spec += *f++; if (*f == '*') { spec += std::to_string((int32_t)arg()); f++; } else while (*f >= '0' && *f <= '9') spec += *f++; }
+        while (*f && strchr("hlLqjzt", *f)) f++;   /* sizes: every argument is one 32-bit register here */
+        const char conv = *f ? *f++ : 0;
+        char buf[512]; buf[0] = 0;
+        switch (conv) {
+        case '%': out += '%'; continue;
+        case 'd': case 'i': spec += 'd'; snprintf(buf, sizeof buf, spec.c_str(), (int)(int32_t)arg()); break;
+        case 'u': case 'x': case 'X': case 'o': spec += conv; snprintf(buf, sizeof buf, spec.c_str(), (unsigned)arg()); break;
+        case 'c': spec += 'c'; snprintf(buf, sizeof buf, spec.c_str(), (int)(arg() & 0xff)); break;
+        case 's': { const uint32_t p = arg(); spec += 's'; snprintf(buf, sizeof buf, spec.c_str(), p ? (const char *)x.mem(p) : "(null)"); break; }
+        case 'p': snprintf(buf, sizeof buf, "%08x", (unsigned)arg()); break;
+        default: out += spec; if (conv) out += conv; continue;
+        }
+        out += buf;
+    }
+    memcpy(x.mem(a[0]), out.c_str(), out.size() + 1);
+    *result = (uint32_t)out.size();
+    return true;
+}
+
 uint32_t SwapCtx::callImport(const char *name, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5, uint32_t a6, uint32_t a7) {
     for (unsigned i = 0; i < mod->nimps; i++) if (!strcmp(mod->imps[i].name, name)) return callNid(mod->imps[i].nid, a0, a1, a2, a3, a4, a5, a6, a7);
+    const uint32_t a[8] = {a0, a1, a2, a3, a4, a5, a6, a7}; uint32_t r = 0;
+    if (host_libc(*this, name, a, &r)) {
+        static std::set<std::string> told;
+        if (told.insert(name).second) fprintf(stderr, "[decomp] import %s has no name in this build: done on the host\n", name);
+        c->r[2] = r;
+        return r;
+    }
     fprintf(stderr, "[decomp] module %s has no import %s\n", mod->name, name);
     return 0;
 }

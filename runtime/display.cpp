@@ -160,6 +160,10 @@ static void paint_frame(HDC dc) {   /* imagem 480x272 na janela: filtro/proporca
 }
 static void quit_process(void);
 static void toggle_fps_overlay(void);
+static void mouse_dump_toggle(void) {   /* F4: gravacao para desenvolver o mouse no Deck Edit / duelo (mouse_ui.cpp) */
+    const bool on = mui_dump_toggle();
+    display_notify(on ? "Mouse recording ON (F4 again to stop)" : "Mouse recording OFF: file saved in logs");
+}
 static bool g_pending_pack;   /* F5: pedido de troca Original <-> Enhanced; aplicado em display_present, entre dois quadros */
 static void request_texture_pack_switch(void) { g_pending_pack = true; }
 
@@ -167,6 +171,7 @@ static void request_texture_pack_switch(void) { g_pending_pack = true; }
 struct Hotkey { int vk; const wchar_t *key, *also, *help; void (*run)(void); };
 static const Hotkey kHotkeys[] = {
     {VK_F3,  L"F3",  L"",              L"show FPS",                                        toggle_fps_overlay},
+    {VK_F4,  L"F4",  L"",              L"record screen data for the mouse (Deck Edit / duel development); press again to stop", mouse_dump_toggle},
     {VK_F5,  L"F5",  L"",              L"switch textures Original / Enhanced",             request_texture_pack_switch},   /* compara com o visual do PSP original */
     {VK_F7,  L"F7",  L"",              L"same as F8",                                      marca_cpu},                     /* atalho antigo, mesma marca geral */
     {VK_F8,  L"F8",  L"",              L"report a problem: graphics, CPU, anything (note + captures + duel state); for something specific. Controller quick marks (no note): L3 = graphics glitch, R3 = performance problem, Start + Select = audio problem", marca_graf},   /* marca geral: nota + quadros + estado do duelo */
@@ -185,6 +190,11 @@ static bool g_keys_held_after_menu;   /* ao fechar um menu: ignora o teclado ate
 void display_ask_exit(void);
 void display_ask_reset_text(const wchar_t *text);
 static int g_wheel_pend;       /* entalhes da roda do mouse ainda por entregar ao jogo (+ cima, - baixo) */
+/* cliques vistos pela janela (WM_xBUTTONDOWN) desde a ultima leitura do mouse, um bit por botao (MUI_BL..): pegam o clique curto que comeca e
+ * termina entre duas leituras (GetAsyncKeyState so ve o estado na hora) */
+static volatile LONG g_mouse_clicks;
+/* o clique que so trouxe a janela para frente nao vai para o jogo: ignora os botoes do mouse ate todos serem soltos */
+static volatile LONG g_mouse_activating;
 bool display_pc_input(void);
 static bool g_pad_connected;   /* ha controle XInput ligado (read_pad atualiza) */
 static bool g_cursor_hidden;   /* cursor do mouse some apos 5 s parado sobre a area do jogo; qualquer movimento traz de volta */
@@ -229,6 +239,15 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_KEYDOWN && w == VK_ESCAPE) {
         if (g_fullscreen) toggle_fullscreen(); else display_ask_exit();
         return 0;
+    }
+    if (m == WM_MOUSEACTIVATE && LOWORD(l) == HTCLIENT && GetForegroundWindow() != h) InterlockedExchange(&g_mouse_activating, 1);
+    {   /* cliques sobre a area do jogo (a janela de apresentacao da GPU e filha desabilitada: os cliques chegam aqui) */
+        int bi = -1;
+        if (m == WM_LBUTTONDOWN || m == WM_LBUTTONDBLCLK) bi = MUI_BL;
+        else if (m == WM_RBUTTONDOWN || m == WM_RBUTTONDBLCLK) bi = MUI_BR;
+        else if (m == WM_MBUTTONDOWN || m == WM_MBUTTONDBLCLK) bi = MUI_BM;
+        else if (m == WM_XBUTTONDOWN || m == WM_XBUTTONDBLCLK) bi = GET_XBUTTON_WPARAM(w) == XBUTTON2 ? MUI_BX2 : MUI_BX1;
+        if (bi >= 0) { if (!g_mouse_activating) InterlockedOr(&g_mouse_clicks, 1 << bi); return m == WM_XBUTTONDOWN || m == WM_XBUTTONDBLCLK ? TRUE : 0; }
     }
     if (m == WM_MOUSEWHEEL && display_pc_input()) {   /* roda = cima/baixo (pulsos em read_keys_pc) */
         static int acc; acc += GET_WHEEL_DELTA_WPARAM(w);
@@ -948,12 +967,13 @@ static uint32_t read_pad(void) {
 static uint32_t read_keys(void);
 static uint32_t g_src_keys, g_src_pad;   /* so para o log: de onde veio cada botao */
 static uint32_t read_keyboard(void) {
-    if (!g_ready || GetForegroundWindow() != g_wnd) return 0;
+    if (!g_ready || GetForegroundWindow() != g_wnd) { InterlockedExchange(&g_mouse_clicks, 0); return 0; }
     /* digitando o nome (caixa dentro do jogo): o teclado e so texto; ao fechar, o Enter que confirmou nao vira START */
     static bool typing_before; const bool typing = text_input_in_game();
     if (typing_before && !typing) g_keys_held_after_menu = true;
     typing_before = typing;
     uint32_t keys = typing ? 0 : read_keys();
+    InterlockedExchange(&g_mouse_clicks, 0);   /* cliques que ninguem leu (digitando, esquema classico sem mouse) nao ficam para depois */
     if (g_keys_held_after_menu) { if (keys) keys = 0; else g_keys_held_after_menu = false; }
     const uint32_t pad = read_pad();
     g_src_keys = keys; g_src_pad = pad;
@@ -1007,21 +1027,25 @@ static uint32_t read_keys_pc(void) {
     if (k(VK_CONTROL)) b |= 0x1;
     POINT p; RECT cr; GetCursorPos(&p); GetClientRect(g_wnd, &cr);
     const bool in_client = ScreenToClient(g_wnd, &p) && PtInRect(&cr, p);   /* cliques so contam sobre a area do jogo (a barra de menu e as bordas ficam do Windows) */
-    bool eat_cross = false; static bool l_prev;
-    {   /* mouse nos menus (mouse_ui.cpp): leva o mouse a coordenadas 480x272 e deixa o modulo apertar direcional/X ate a barra sob o mouse */
-        int ix, iy, iw, ih, mx = 0, my = 0; bool inside = false;
-        if (in_client) { gfx_dest_rect(cr.right, cr.bottom, &ix, &iy, &iw, &ih); if (iw > 0 && ih > 0 && p.x >= ix && p.x < ix + iw && p.y >= iy && p.y < iy + ih) { inside = true; mx = (p.x - ix) * 480 / iw; my = (p.y - iy) * 272 / ih; } }
-        const bool l_down = in_client && k(VK_LBUTTON);
-        if (display_mouse_menus()) b |= mui_update(g_frames, inside, mx, my, l_down && !l_prev, l_down, b & 0xf0, &eat_cross);
-        l_prev = l_down;
+    MuiMouse m = {};
+    m.in_client = in_client;
+    if (in_client) {   /* mouse em coordenadas 480x272 (inside = sobre a imagem do jogo, fora das faixas pretas) */
+        int ix, iy, iw, ih; gfx_dest_rect(cr.right, cr.bottom, &ix, &iy, &iw, &ih);
+        if (iw > 0 && ih > 0 && p.x >= ix && p.x < ix + iw && p.y >= iy && p.y < iy + ih) { m.inside = true; m.mx = (p.x - ix) * 480 / iw; m.my = (p.y - iy) * 272 / ih; }
     }
-    if (in_client) {
-        if (k(VK_LBUTTON) && !eat_cross) b |= 0x4000;
-        if (k(VK_RBUTTON)) b |= 0x2000;
-        if (k(VK_MBUTTON)) b |= 0x1000;
-        if (k(VK_XBUTTON1)) b |= 0x100;
-        if (k(VK_XBUTTON2)) b |= 0x200;
+    /* GetAsyncKeyState ve os botoes FISICOS; com os botoes trocados no Windows (mouse de canhoto) o esquerdo logico e o direito fisico */
+    const bool swap = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+    m.down[MUI_BL] = k(swap ? VK_RBUTTON : VK_LBUTTON); m.down[MUI_BR] = k(swap ? VK_LBUTTON : VK_RBUTTON);
+    m.down[MUI_BM] = k(VK_MBUTTON); m.down[MUI_BX1] = k(VK_XBUTTON1); m.down[MUI_BX2] = k(VK_XBUTTON2);
+    const LONG clicks = InterlockedExchange(&g_mouse_clicks, 0);
+    for (int i = 0; i < MUI_NB; i++) m.clicked[i] = in_client && (clicks & (1 << i));
+    if (g_mouse_activating) {   /* clique de ativacao da janela: nada do mouse vai para o jogo ate soltar todos os botoes */
+        bool any = false; for (int i = 0; i < MUI_NB; i++) any |= m.down[i];
+        if (any) { for (int i = 0; i < MUI_NB; i++) m.down[i] = m.clicked[i] = false; }
+        else InterlockedExchange(&g_mouse_activating, 0);
     }
+    /* mouse nos menus (mouse_ui.cpp) + botoes do mouse (esquerdo = X, direito = O, meio = triangulo, laterais = L/R) */
+    b |= mui_mouse(g_frames, m, display_mouse_menus(), b & 0xf0);
     return b | wheel_bits();
 }
 static uint32_t read_keys(void) {
@@ -1067,17 +1091,18 @@ static void latch_buttons(void) {   /* chamado a cada quadro */
         static size_t i; static uint32_t smask; while (i < g_script.size() && g_script[i].first <= g_frames) smask = g_script[i++].second;
         g_latched = smask;
         /* TF_MOUSE_AT="quadro:x:y:botao,...": mouse simulado (x,y em 480x272; botao 1 = esquerdo apertado) para testar o mouse nos menus sem tocar no do jogador */
-        static const char *ma = getenv("TF_MOUSE_AT"); static int mx = -1, my = -1, ml; static const char *mp = ma; static bool prev;
+        static const char *ma = getenv("TF_MOUSE_AT"); static int mx = -1, my = -1, ml; static const char *mp = ma;
         if (ma) {
             while (mp && *mp) { char *e; unsigned long long q = strtoull(mp, &e, 10); if (q > g_frames || *e != ':') break;
                 mx = (int)strtol(e + 1, &e, 10); my = (int)strtol(e + 1, &e, 10); ml = (int)strtol(e + 1, &e, 10); mp = *e == ',' ? e + 1 : e; }
-            bool eat; uint32_t held; const uint32_t scr = smask;
-            held = mui_update(g_frames, mx >= 0, mx, my, ml && !prev, ml != 0, scr & 0xf0, &eat); prev = ml != 0;
-            g_latched = scr | held | (ml && !eat ? 0x4000 : 0);
+            const uint32_t scr = smask;
+            MuiMouse m = {}; m.in_client = true; m.inside = mx >= 0; m.mx = mx; m.my = my; m.down[MUI_BL] = ml != 0;
+            g_latched = scr | mui_mouse(g_frames, m, true, scr & 0xf0);
         }
         return;
     }
     uint32_t b = read_keyboard();
+    mui_dump_buttons(g_frames, b);
     if (b != g_latched) {
         g_latched = b; diag_record_buttons(g_frames, b);
         static int nlog; if (nlog < 40) { nlog++; fprintf(stderr, "[entrada] quadro %llu: botoes %X (teclado/mouse %X, controle %X)\n", (unsigned long long)g_frames, b, g_src_keys, g_src_pad); }

@@ -1,0 +1,1057 @@
+diff -ruN -x '*.o' orig/CHANGELOG.md src/tagforcerecomp-preview-master/CHANGELOG.md
+--- a/CHANGELOG.md	2026-10-18 21:05:35.917574003 +0000
++++ b/CHANGELOG.md	2026-10-18 23:04:36.752917824 +0000
+@@ -2,6 +2,38 @@
+ 
+ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
+ 
++## [Unreleased]
++
++### Fixed
++- Mouse in menus: a click no longer confirms twice when the menu closes with an animation while the button is still held (the click
++  is owned by the mouse module until the button is released).
++- Mouse in menus: clicking an item and letting the mouse slip onto the next one confirms the item that was clicked.
++- Mouse in menus: right after the selection moves, the module waits for the highlight to catch up before confirming or correcting
++  (it could open the item before the one under the mouse).
++- Mouse in menus: a highlight that blinks or animates no longer makes the click confirm whatever was selected; the module waits for
++  the highlight to come back (plain X only if the selection stays unknown for 12 frames, as before).
++- Mouse in menus: moving the mouse inside the same item no longer restarts the navigation, and changing target never cuts a d-pad
++  press in half.
++- Mouse in menus: greyed-out items (e.g. Free Duel / Network Mode in the main menu early in the game) are skipped by the game's d-pad;
++  the module counted them as steps, overshot the target and the highlight kept jumping up and down. Greyed-out bars are now recognised
++  (by their style, and by learning which styles have ever been selected), not counted and not targeted; a click on one does nothing.
++- Very short clicks (shorter than the game's 2-frame input poll) are no longer lost: the window records every button-down and each
++  click stays pressed for at least 3 frames.
++- The click that only brings the window to the front is no longer sent to the game.
++- Mouse buttons follow the Windows "switch primary and secondary buttons" setting.
++- Clean builds (ISO only, no decompiler data) crashed when the title menu loaded: the decomp swaps call `sprintf`/`strlen` by import
++  name, and those names only exist in the maintainers' NID table. They are now done on the host when the import has no name.
++
++### Added
++- Mouse in menus now also works on **cards**: in Deck Edit (the grid of card thumbnails) and in a **duel** (your hand, your monsters
++  and Spell/Trap cards, the opponent's monsters, e.g. as attack targets), clicking a card moves the game's cursor there and selects it. Measured from F4 recordings: thumbnails 22x30 in a 28x34 grid with a 9-piece frame
++  cursor; hand and field cards are 3D quads drawn twice (shared frame texture + art) with a 32x32 pointer on the chosen one; on the field the
++  cursor changes row one step at a time (rows have gaps). Only clicks act there (hovering does not move the cursor,
++  because small windows on those screens also use the d-pad); if the cursor does not move (a window is open) nothing is confirmed.
++- **F4**: records what the game draws on each frame (2D sprites, text lines, 3D card quads) plus the buttons and the mouse, to
++  `logs/<session>_mouse.txt`, to develop mouse support for screens that are not lists (Deck Edit, duel).
++- `tools/teste_mouse/`: offline simulator and randomized test for the mouse module (no game or Windows needed).
++
+ ## [0.3.0] - 2026-10-18
+ 
+ ### Added
+diff -ruN -x '*.o' orig/decomp/decomp.cpp src/tagforcerecomp-preview-master/decomp/decomp.cpp
+--- a/decomp/decomp.cpp	2026-10-18 21:05:35.917889436 +0000
++++ b/decomp/decomp.cpp	2026-10-18 21:42:48.030209404 +0000
+@@ -102,8 +102,49 @@
+     psp_call(c, target);
+     return c->r[2];
+ }
++/* libc imports done on the host when the module's import has no name. The names of libc imports come from a NID table that only exists
++ * where the decompiler workflow was run (gen/ferramentas_decomp/dados/nids.tsv); a clean build from the ISO alone knows only the HLE names,
++ * so "sprintf"/"strlen" are not found by name. Without this the title menu built its archive path from an uninitialised buffer and crashed. */
++static bool host_libc(SwapCtx &x, const char *name, const uint32_t *a, uint32_t *result) {
++    if (!strcmp(name, "strlen")) { *result = (uint32_t)strlen((const char *)x.mem(a[0])); return true; }
++    if (strcmp(name, "sprintf")) return false;
++    const char *f = (const char *)x.mem(a[1]);
++    std::string out; int next = 2;   /* a[2..7] = the variadic arguments, as the guest passes them in registers */
++    auto arg = [&]() -> uint32_t { return next < 8 ? a[next++] : 0; };
++    while (*f) {
++        if (*f != '%') { out += *f++; continue; }
++        std::string spec = "%"; f++;
++        while (*f && strchr("-+ #0", *f)) spec += *f++;
++        if (*f == '*') { spec += std::to_string((int32_t)arg()); f++; } else while (*f >= '0' && *f <= '9') spec += *f++;
++        if (*f == '.') { spec += *f++; if (*f == '*') { spec += std::to_string((int32_t)arg()); f++; } else while (*f >= '0' && *f <= '9') spec += *f++; }
++        while (*f && strchr("hlLqjzt", *f)) f++;   /* sizes: every argument is one 32-bit register here */
++        const char conv = *f ? *f++ : 0;
++        char buf[512]; buf[0] = 0;
++        switch (conv) {
++        case '%': out += '%'; continue;
++        case 'd': case 'i': spec += 'd'; snprintf(buf, sizeof buf, spec.c_str(), (int)(int32_t)arg()); break;
++        case 'u': case 'x': case 'X': case 'o': spec += conv; snprintf(buf, sizeof buf, spec.c_str(), (unsigned)arg()); break;
++        case 'c': spec += 'c'; snprintf(buf, sizeof buf, spec.c_str(), (int)(arg() & 0xff)); break;
++        case 's': { const uint32_t p = arg(); spec += 's'; snprintf(buf, sizeof buf, spec.c_str(), p ? (const char *)x.mem(p) : "(null)"); break; }
++        case 'p': snprintf(buf, sizeof buf, "%08x", (unsigned)arg()); break;
++        default: out += spec; if (conv) out += conv; continue;
++        }
++        out += buf;
++    }
++    memcpy(x.mem(a[0]), out.c_str(), out.size() + 1);
++    *result = (uint32_t)out.size();
++    return true;
++}
++
+ uint32_t SwapCtx::callImport(const char *name, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5, uint32_t a6, uint32_t a7) {
+     for (unsigned i = 0; i < mod->nimps; i++) if (!strcmp(mod->imps[i].name, name)) return callNid(mod->imps[i].nid, a0, a1, a2, a3, a4, a5, a6, a7);
++    const uint32_t a[8] = {a0, a1, a2, a3, a4, a5, a6, a7}; uint32_t r = 0;
++    if (host_libc(*this, name, a, &r)) {
++        static std::set<std::string> told;
++        if (told.insert(name).second) fprintf(stderr, "[decomp] import %s has no name in this build: done on the host\n", name);
++        c->r[2] = r;
++        return r;
++    }
+     fprintf(stderr, "[decomp] module %s has no import %s\n", mod->name, name);
+     return 0;
+ }
+diff -ruN -x '*.o' orig/runtime/display.cpp src/tagforcerecomp-preview-master/runtime/display.cpp
+--- a/runtime/display.cpp	2026-10-18 21:05:35.920209078 +0000
++++ b/runtime/display.cpp	2026-10-18 22:08:49.660342657 +0000
+@@ -160,6 +160,10 @@
+ }
+ static void quit_process(void);
+ static void toggle_fps_overlay(void);
++static void mouse_dump_toggle(void) {   /* F4: gravacao para desenvolver o mouse no Deck Edit / duelo (mouse_ui.cpp) */
++    const bool on = mui_dump_toggle();
++    display_notify(on ? "Mouse recording ON (F4 again to stop)" : "Mouse recording OFF: file saved in logs");
++}
+ static bool g_pending_pack;   /* F5: pedido de troca Original <-> Enhanced; aplicado em display_present, entre dois quadros */
+ static void request_texture_pack_switch(void) { g_pending_pack = true; }
+ 
+@@ -167,6 +171,7 @@
+ struct Hotkey { int vk; const wchar_t *key, *also, *help; void (*run)(void); };
+ static const Hotkey kHotkeys[] = {
+     {VK_F3,  L"F3",  L"",              L"show FPS",                                        toggle_fps_overlay},
++    {VK_F4,  L"F4",  L"",              L"record screen data for the mouse (Deck Edit / duel development); press again to stop", mouse_dump_toggle},
+     {VK_F5,  L"F5",  L"",              L"switch textures Original / Enhanced",             request_texture_pack_switch},   /* compara com o visual do PSP original */
+     {VK_F7,  L"F7",  L"",              L"same as F8",                                      marca_cpu},                     /* atalho antigo, mesma marca geral */
+     {VK_F8,  L"F8",  L"",              L"report a problem: graphics, CPU, anything (note + captures + duel state); for something specific. Controller quick marks (no note): L3 = graphics glitch, R3 = performance problem, Start + Select = audio problem", marca_graf},   /* marca geral: nota + quadros + estado do duelo */
+@@ -185,6 +190,11 @@
+ void display_ask_exit(void);
+ void display_ask_reset_text(const wchar_t *text);
+ static int g_wheel_pend;       /* entalhes da roda do mouse ainda por entregar ao jogo (+ cima, - baixo) */
++/* cliques vistos pela janela (WM_xBUTTONDOWN) desde a ultima leitura do mouse, um bit por botao (MUI_BL..): pegam o clique curto que comeca e
++ * termina entre duas leituras (GetAsyncKeyState so ve o estado na hora) */
++static volatile LONG g_mouse_clicks;
++/* o clique que so trouxe a janela para frente nao vai para o jogo: ignora os botoes do mouse ate todos serem soltos */
++static volatile LONG g_mouse_activating;
+ bool display_pc_input(void);
+ static bool g_pad_connected;   /* ha controle XInput ligado (read_pad atualiza) */
+ static bool g_cursor_hidden;   /* cursor do mouse some apos 5 s parado sobre a area do jogo; qualquer movimento traz de volta */
+@@ -230,6 +240,15 @@
+         if (g_fullscreen) toggle_fullscreen(); else display_ask_exit();
+         return 0;
+     }
++    if (m == WM_MOUSEACTIVATE && LOWORD(l) == HTCLIENT && GetForegroundWindow() != h) InterlockedExchange(&g_mouse_activating, 1);
++    {   /* cliques sobre a area do jogo (a janela de apresentacao da GPU e filha desabilitada: os cliques chegam aqui) */
++        int bi = -1;
++        if (m == WM_LBUTTONDOWN || m == WM_LBUTTONDBLCLK) bi = MUI_BL;
++        else if (m == WM_RBUTTONDOWN || m == WM_RBUTTONDBLCLK) bi = MUI_BR;
++        else if (m == WM_MBUTTONDOWN || m == WM_MBUTTONDBLCLK) bi = MUI_BM;
++        else if (m == WM_XBUTTONDOWN || m == WM_XBUTTONDBLCLK) bi = GET_XBUTTON_WPARAM(w) == XBUTTON2 ? MUI_BX2 : MUI_BX1;
++        if (bi >= 0) { if (!g_mouse_activating) InterlockedOr(&g_mouse_clicks, 1 << bi); return m == WM_XBUTTONDOWN || m == WM_XBUTTONDBLCLK ? TRUE : 0; }
++    }
+     if (m == WM_MOUSEWHEEL && display_pc_input()) {   /* roda = cima/baixo (pulsos em read_keys_pc) */
+         static int acc; acc += GET_WHEEL_DELTA_WPARAM(w);
+         while (acc >= WHEEL_DELTA) { acc -= WHEEL_DELTA; if (g_wheel_pend < 8) g_wheel_pend++; }
+@@ -948,12 +967,13 @@
+ static uint32_t read_keys(void);
+ static uint32_t g_src_keys, g_src_pad;   /* so para o log: de onde veio cada botao */
+ static uint32_t read_keyboard(void) {
+-    if (!g_ready || GetForegroundWindow() != g_wnd) return 0;
++    if (!g_ready || GetForegroundWindow() != g_wnd) { InterlockedExchange(&g_mouse_clicks, 0); return 0; }
+     /* digitando o nome (caixa dentro do jogo): o teclado e so texto; ao fechar, o Enter que confirmou nao vira START */
+     static bool typing_before; const bool typing = text_input_in_game();
+     if (typing_before && !typing) g_keys_held_after_menu = true;
+     typing_before = typing;
+     uint32_t keys = typing ? 0 : read_keys();
++    InterlockedExchange(&g_mouse_clicks, 0);   /* cliques que ninguem leu (digitando, esquema classico sem mouse) nao ficam para depois */
+     if (g_keys_held_after_menu) { if (keys) keys = 0; else g_keys_held_after_menu = false; }
+     const uint32_t pad = read_pad();
+     g_src_keys = keys; g_src_pad = pad;
+@@ -1007,21 +1027,25 @@
+     if (k(VK_CONTROL)) b |= 0x1;
+     POINT p; RECT cr; GetCursorPos(&p); GetClientRect(g_wnd, &cr);
+     const bool in_client = ScreenToClient(g_wnd, &p) && PtInRect(&cr, p);   /* cliques so contam sobre a area do jogo (a barra de menu e as bordas ficam do Windows) */
+-    bool eat_cross = false; static bool l_prev;
+-    {   /* mouse nos menus (mouse_ui.cpp): leva o mouse a coordenadas 480x272 e deixa o modulo apertar direcional/X ate a barra sob o mouse */
+-        int ix, iy, iw, ih, mx = 0, my = 0; bool inside = false;
+-        if (in_client) { gfx_dest_rect(cr.right, cr.bottom, &ix, &iy, &iw, &ih); if (iw > 0 && ih > 0 && p.x >= ix && p.x < ix + iw && p.y >= iy && p.y < iy + ih) { inside = true; mx = (p.x - ix) * 480 / iw; my = (p.y - iy) * 272 / ih; } }
+-        const bool l_down = in_client && k(VK_LBUTTON);
+-        if (display_mouse_menus()) b |= mui_update(g_frames, inside, mx, my, l_down && !l_prev, l_down, b & 0xf0, &eat_cross);
+-        l_prev = l_down;
+-    }
+-    if (in_client) {
+-        if (k(VK_LBUTTON) && !eat_cross) b |= 0x4000;
+-        if (k(VK_RBUTTON)) b |= 0x2000;
+-        if (k(VK_MBUTTON)) b |= 0x1000;
+-        if (k(VK_XBUTTON1)) b |= 0x100;
+-        if (k(VK_XBUTTON2)) b |= 0x200;
++    MuiMouse m = {};
++    m.in_client = in_client;
++    if (in_client) {   /* mouse em coordenadas 480x272 (inside = sobre a imagem do jogo, fora das faixas pretas) */
++        int ix, iy, iw, ih; gfx_dest_rect(cr.right, cr.bottom, &ix, &iy, &iw, &ih);
++        if (iw > 0 && ih > 0 && p.x >= ix && p.x < ix + iw && p.y >= iy && p.y < iy + ih) { m.inside = true; m.mx = (p.x - ix) * 480 / iw; m.my = (p.y - iy) * 272 / ih; }
++    }
++    /* GetAsyncKeyState ve os botoes FISICOS; com os botoes trocados no Windows (mouse de canhoto) o esquerdo logico e o direito fisico */
++    const bool swap = GetSystemMetrics(SM_SWAPBUTTON) != 0;
++    m.down[MUI_BL] = k(swap ? VK_RBUTTON : VK_LBUTTON); m.down[MUI_BR] = k(swap ? VK_LBUTTON : VK_RBUTTON);
++    m.down[MUI_BM] = k(VK_MBUTTON); m.down[MUI_BX1] = k(VK_XBUTTON1); m.down[MUI_BX2] = k(VK_XBUTTON2);
++    const LONG clicks = InterlockedExchange(&g_mouse_clicks, 0);
++    for (int i = 0; i < MUI_NB; i++) m.clicked[i] = in_client && (clicks & (1 << i));
++    if (g_mouse_activating) {   /* clique de ativacao da janela: nada do mouse vai para o jogo ate soltar todos os botoes */
++        bool any = false; for (int i = 0; i < MUI_NB; i++) any |= m.down[i];
++        if (any) { for (int i = 0; i < MUI_NB; i++) m.down[i] = m.clicked[i] = false; }
++        else InterlockedExchange(&g_mouse_activating, 0);
+     }
++    /* mouse nos menus (mouse_ui.cpp) + botoes do mouse (esquerdo = X, direito = O, meio = triangulo, laterais = L/R) */
++    b |= mui_mouse(g_frames, m, display_mouse_menus(), b & 0xf0);
+     return b | wheel_bits();
+ }
+ static uint32_t read_keys(void) {
+@@ -1067,17 +1091,18 @@
+         static size_t i; static uint32_t smask; while (i < g_script.size() && g_script[i].first <= g_frames) smask = g_script[i++].second;
+         g_latched = smask;
+         /* TF_MOUSE_AT="quadro:x:y:botao,...": mouse simulado (x,y em 480x272; botao 1 = esquerdo apertado) para testar o mouse nos menus sem tocar no do jogador */
+-        static const char *ma = getenv("TF_MOUSE_AT"); static int mx = -1, my = -1, ml; static const char *mp = ma; static bool prev;
++        static const char *ma = getenv("TF_MOUSE_AT"); static int mx = -1, my = -1, ml; static const char *mp = ma;
+         if (ma) {
+             while (mp && *mp) { char *e; unsigned long long q = strtoull(mp, &e, 10); if (q > g_frames || *e != ':') break;
+                 mx = (int)strtol(e + 1, &e, 10); my = (int)strtol(e + 1, &e, 10); ml = (int)strtol(e + 1, &e, 10); mp = *e == ',' ? e + 1 : e; }
+-            bool eat; uint32_t held; const uint32_t scr = smask;
+-            held = mui_update(g_frames, mx >= 0, mx, my, ml && !prev, ml != 0, scr & 0xf0, &eat); prev = ml != 0;
+-            g_latched = scr | held | (ml && !eat ? 0x4000 : 0);
++            const uint32_t scr = smask;
++            MuiMouse m = {}; m.in_client = true; m.inside = mx >= 0; m.mx = mx; m.my = my; m.down[MUI_BL] = ml != 0;
++            g_latched = scr | mui_mouse(g_frames, m, true, scr & 0xf0);
+         }
+         return;
+     }
+     uint32_t b = read_keyboard();
++    mui_dump_buttons(g_frames, b);
+     if (b != g_latched) {
+         g_latched = b; diag_record_buttons(g_frames, b);
+         static int nlog; if (nlog < 40) { nlog++; fprintf(stderr, "[entrada] quadro %llu: botoes %X (teclado/mouse %X, controle %X)\n", (unsigned long long)g_frames, b, g_src_keys, g_src_pad); }
+diff -ruN -x '*.o' orig/runtime/hle_ge.cpp src/tagforcerecomp-preview-master/runtime/hle_ge.cpp
+--- a/runtime/hle_ge.cpp	2026-10-18 21:05:35.920478557 +0000
++++ b/runtime/hle_ge.cpp	2026-10-18 22:34:07.476719605 +0000
+@@ -1619,10 +1619,13 @@
+         float qx0 = vv[0].x, qx1 = vv[0].x, qy0 = vv[0].y, qy1 = vv[0].y;
+         for (int i = 1; i < 4; i++) { qx0 = std::min(qx0, vv[i].x); qx1 = std::max(qx1, vv[i].x); qy0 = std::min(qy0, vv[i].y); qy1 = std::max(qy1, vv[i].y); }
+         modbox_quad(fb_base(), qx0, qy0, qx1, qy1);
++        extern bool mui_dump_on(void); extern void mui_quad(uint32_t, int, int, int, int, uint32_t); extern bool display_mouse_menus(void);
++        if (display_mouse_menus() || mui_dump_on()) mui_quad(fb_base(), (int)qx0, (int)qy0, (int)qx1, (int)qy1, tex_addr());   /* mouse: cartas 3D (mao do duelo) */
+     }
+     if (type == 6 && count >= 2 && !(count & 1) && t.through && textured) {   /* sprites 2D texturizados: o modulo do mouse acha barras de menu (2 vertices) e linhas de texto (varios sprites num PRIM) */
+         extern bool display_mouse_menus(void); extern void mui_prim(uint32_t, int, int, int, int, float, float, float, float, uint32_t, uint32_t); extern void mui_run(uint32_t, int, int, int, int);
+-        if (display_mouse_menus()) {
++        extern bool mui_dump_on(void);
++        if (display_mouse_menus() || mui_dump_on()) {
+             if (count == 2) mui_prim(fb_base(), (int)vv[0].x, (int)vv[0].y, (int)vv[1].x, (int)vv[1].y, vv[0].u, vv[0].v, vv[1].u, vv[1].v, tex_addr(), vv[1].col);
+             else { float a = vv[0].x, b = vv[0].y, c = a, d = b; for (uint32_t i = 1; i < count; i++) { a = std::min(a, vv[i].x); c = std::max(c, vv[i].x); b = std::min(b, vv[i].y); d = std::max(d, vv[i].y); } mui_run(fb_base(), (int)a, (int)b, (int)c, (int)d); }
+         }
+diff -ruN -x '*.o' orig/runtime/menu.cpp src/tagforcerecomp-preview-master/runtime/menu.cpp
+--- a/runtime/menu.cpp	2026-10-18 21:05:35.920854414 +0000
++++ b/runtime/menu.cpp	2026-10-18 23:04:36.753509415 +0000
+@@ -374,7 +374,7 @@
+         L"   F = \x25A1   R or middle click = \x25B3\n"
+         L"   Q / Tab = L / R (or the mouse side buttons)\n"
+         L"   Mouse wheel = up / down\n"
+-        L"   View > Mouse in menus (experimental, off): hovering highlights the item, clicking confirms\n"
++        L"   View > Mouse in menus (experimental, off): hovering highlights the item, clicking confirms; in Deck Edit and in a duel (hand and field), clicking a card moves the cursor there and selects it\n"
+         L"   Shift = run (holds \x25CB)   Enter = START   Ctrl = SELECT\n\n"
+         L"Classic keyboard (with the option off)\n"
+         L"   Arrows, Z = \x2715   X = \x25CB   A = \x25A1   S = \x25B3, Q / W = L / R\n\n"
+diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/runtime/mouse_ui.cpp
+--- a/runtime/mouse_ui.cpp	2026-10-18 21:05:35.920962004 +0000
++++ b/runtime/mouse_ui.cpp	2026-10-18 23:03:37.308816281 +0000
+@@ -22,6 +22,7 @@
+ std::set<uint64_t> g_known;                   /* assinaturas ja vistas como 'selecionada' em listas com 3 ou mais barras (valem tambem para listas de 2) */
+ std::set<uint64_t> g_normal;                  /* assinaturas ja vistas em 2 ou mais barras de uma mesma lista (estilo 'nao selecionada') */
+ int g_sel = -1;                               /* indice em g_list da barra selecionada (-1 = nao deu para saber) */
++std::vector<bool> g_skip;                     /* barras apagadas (item indisponivel, ex. 'Free Duel' no inicio): o jogo as PULA no direcional */
+ const bool g_mtrace = getenv("TF_MOUSE_TRACE") != nullptr;
+ 
+ uint64_t mix(uint64_t h, uint64_t v) { return (h ^ v) * 0x100000001b3ull; }
+@@ -29,7 +30,7 @@
+ void trace_list() {
+     if (!g_mtrace) return;
+     static std::string last; char buf[4096]; int n = snprintf(buf, sizeof buf, "sel=%d known=%zu:", g_sel, g_known.size());
+-    for (const Bar &b : g_list) n += snprintf(buf + n, sizeof buf - n, " [%d,%d %dx%d %04x]", b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0, (unsigned)(b.sig & 0xffff));
++    for (size_t i = 0; i < g_list.size(); i++) { const Bar &b = g_list[i]; n += snprintf(buf + n, sizeof buf - n, " [%d,%d %dx%d %04x%s]", b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0, (unsigned)(b.sig & 0xffff), i < g_skip.size() && g_skip[i] ? " apagada" : ""); }
+     if (last != buf) { last = buf; fprintf(stderr, "[mouse] lista: %s\n", buf); }
+ }
+ 
+@@ -90,8 +91,33 @@
+ }
+ 
+ /* barras = sequencias contiguas na horizontal de sprites de mesma altura (ponta, meio, ponta) com um meio largo */
++/* Barras apagadas: com a selecionada conhecida, o estilo da maioria das outras e o 'normal'; um estilo minoritario (outra textura/cor) e de
++ * item indisponivel, que o jogo pula ao apertar o direcional (no menu principal, 'Free Duel' e 'Network Mode' no comeco do jogo). Contar
++ * essas barras como passos fazia a rajada passar do alvo e a selecao ficar pulando para cima e para baixo. */
++std::set<uint64_t> g_enabled;                 /* estilos de barra que ja receberam o destaque (logo, de item habilitado: o jogo nunca seleciona um apagado) */
++std::vector<Bar> g_prev_list;                 /* lista do quadro anterior (para ver qual estilo tinha a barra que acabou de ser selecionada) */
++void classify_skip() {
++    g_skip.assign(g_list.size(), false);
++    if (g_sel >= 0)   /* a barra que agora esta selecionada, no quadro anterior, estava com o estilo de item normal habilitado */
++        for (const Bar &b : g_prev_list) if (b.x0 == g_list[g_sel].x0 && b.y0 == g_list[g_sel].y0 && b.sig != g_list[g_sel].sig && b.sig) g_enabled.insert(b.sig);
++    g_prev_list = g_list;
++    if (g_sel < 0 || g_list.size() < 3) return;
++    std::map<uint64_t, int> cnt;
++    for (size_t i = 0; i < g_list.size(); i++) if ((int)i != g_sel && g_list[i].sig) cnt[g_list[i].sig]++;
++    if (cnt.size() < 2) return;
++    bool any_enabled = false; for (auto &c : cnt) any_enabled |= g_enabled.count(c.first) != 0;
++    if (any_enabled) {   /* ja se sabe qual estilo e de item habilitado: os outros sao de item apagado */
++        for (size_t i = 0; i < g_list.size(); i++) if ((int)i != g_sel && !g_enabled.count(g_list[i].sig)) g_skip[i] = true;
++        return;
++    }
++    uint64_t major = 0; int mc = 0, second = 0;
++    for (auto &c : cnt) { if (c.second > mc) { second = mc; mc = c.second; major = c.first; } else if (c.second > second) second = c.second; }
++    if (mc == second) return;   /* empate: nao da para dizer qual e o estilo normal */
++    for (size_t i = 0; i < g_list.size(); i++) if ((int)i != g_sel && g_list[i].sig != major) g_skip[i] = true;
++}
++
+ void analyze() {
+-    g_list.clear(); g_sel = -1;
++    g_list.clear(); g_sel = -1; g_skip.clear();
+     std::vector<Spr> u;   /* sem repeticoes de retangulo, para achar as cadeias */
+     for (const Spr &s : g_snap) {
+         const int h = s.y1 - s.y0, w = s.x1 - s.x0;
+@@ -122,7 +148,7 @@
+     for (size_t i = 0; i < bars.size(); i++) grp[std::make_tuple(bars[i].x1 - bars[i].x0, bars[i].y1 - bars[i].y0, bars[i].x0)].push_back((int)i);
+     const std::vector<int> *best = nullptr; size_t best_last = 0;
+     for (auto &g : grp) { size_t l = 0; for (int i : g.second) l = std::max(l, bars[i].last); if (g.second.size() >= 2 && (!best || l > best_last)) { best = &g.second; best_last = l; } }
+-    if (!best) { analyze_text(); trace_list(); return; }
++    if (!best) { analyze_text(); g_skip.assign(g_list.size(), false); trace_list(); return; }
+     for (int i : *best) g_list.push_back(bars[i]);
+     std::sort(g_list.begin(), g_list.end(), [](const Bar &a, const Bar &b) { return a.y0 < b.y0; });
+     /* selecionada: (1) lista de 3+ com so duas assinaturas e uma barra isolada = ela (e as outras sao o estilo 'normal'); (2) uma assinatura ja vista como
+@@ -141,6 +167,7 @@
+             if (n != 1) g_sel = -1; else g_known.insert(g_list[g_sel].sig);
+         }
+     }
++    classify_skip();
+     trace_list();
+ }
+ 
+@@ -148,9 +175,23 @@
+ int g_tkx = -1, g_tky = -1;          /* barra alvo (canto superior esquerdo), -1 = nenhuma */
+ bool g_pending;                       /* clique esperando a selecao chegar na barra */
+ uint64_t g_pending_until, g_next_tap, g_pulse_end; uint32_t g_pulse; int g_taps;
++uint64_t g_sel_seen;                  /* ultimo quadro em que a selecao foi reconhecida (para distinguir 'sumiu agora' de 'nunca aparece nesta tela') */
+ int g_lmx = -1, g_lmy = -1;
+ int g_burst_n, g_burst_dir; uint64_t g_burst_start, g_burst_end;
++const int kSettle = 12;   /* quadros de espera depois de uma rajada ate confiar no realce desenhado */
+ const int g_period = std::max(2, getenv("TF_MOUSE_PERIOD") ? atoi(getenv("TF_MOUSE_PERIOD")) : 4);   /* quadros por passo (metade apertado, metade solto) */
++
++bool burst_running(uint64_t frame) { return g_burst_n && frame < g_burst_start + (uint64_t)g_burst_n * g_period; }
++/* troca de alvo no meio de uma rajada: NAO corta o aperto atual no meio (um aperto de 1 quadro o jogo pode nao ver, e a contagem de passos
++ * fica errada); termina o passo em andamento e para ai. A correcao ate o alvo novo vem depois, a partir da selecao que o jogo desenhar. */
++void trim_burst(uint64_t frame) {
++    if (!burst_running(frame)) return;
++    const int started = (int)((frame - g_burst_start) / (uint64_t)g_period) + 1;
++    if (started < g_burst_n) g_burst_n = started;
++}
++void set_target(int i, uint64_t frame) {
++    g_tkx = g_list[i].x0; g_tky = g_list[i].y0; g_taps = 0; trim_burst(frame);
++}
+ }
+ 
+ void mui_prim(uint32_t fb, int x0, int y0, int x1, int y1, float u0, float v0, float u1, float v1, uint32_t tex, uint32_t col) {
+@@ -167,11 +208,68 @@
+     if (v.size() < 400) v.push_back({x0, y0, x1, y1});
+ }
+ 
++/* ---- gravacao (F4) ---- */
++namespace {
++struct Quad { int x0, y0, x1, y1; uint32_t tex; };
++std::map<uint32_t, std::vector<Quad>> g_cur_quads; std::vector<Quad> g_quads;
++FILE *g_dump; bool g_dump_on; uint64_t g_dump_frame, g_dump_hash, g_dump_bytes; int g_dump_mx = -1, g_dump_my = -1; uint32_t g_dump_lastb = ~0u;
++const uint64_t kDumpMax = 300ull << 20;   /* 300 MB: para sozinho (o texto compacta ~10x num zip) */
++void dump_frame(uint32_t fb) {
++    if (!g_dump_on || !g_dump) return;
++    uint64_t h = 0xcbf29ce484222325ull;
++    for (const Spr &a : g_snap) { h = mix(h, (uint64_t)a.x0 << 32 | (uint32_t)a.y0); h = mix(h, (uint64_t)a.x1 << 32 | (uint32_t)a.y1); h = mix(h, a.tex); h = mix(h, a.col); h = mix(h, (uint64_t)(a.u0 * 16) << 32 | (uint32_t)(a.v0 * 16)); }
++    for (const Run &a : g_runs) { h = mix(h, (uint64_t)a.x0 << 32 | (uint32_t)a.y0); h = mix(h, (uint64_t)a.x1 << 32 | (uint32_t)a.y1); }
++    for (const Quad &a : g_quads) { h = mix(h, (uint64_t)a.x0 << 32 | (uint32_t)a.y0); h = mix(h, (uint64_t)a.x1 << 32 | (uint32_t)a.y1); h = mix(h, a.tex); }
++    int n;
++    if (h == g_dump_hash) { n = fprintf(g_dump, "F %llu same\n", (unsigned long long)g_dump_frame); g_dump_bytes += n > 0 ? n : 0; return; }
++    g_dump_hash = h;
++    n = fprintf(g_dump, "F %llu fb=%x sprites=%zu runs=%zu quads=%zu sel=%d list=%zu\n", (unsigned long long)g_dump_frame, fb, g_snap.size(), g_runs.size(), g_quads.size(), g_sel, g_list.size());
++    g_dump_bytes += n > 0 ? n : 0;
++    for (const Spr &a : g_snap) { n = fprintf(g_dump, "S %d %d %d %d %.1f %.1f %.1f %.1f %x %x\n", a.x0, a.y0, a.x1, a.y1, a.u0, a.v0, a.u1, a.v1, a.tex, a.col); g_dump_bytes += n > 0 ? n : 0; }
++    for (const Run &a : g_runs) { n = fprintf(g_dump, "R %d %d %d %d\n", a.x0, a.y0, a.x1, a.y1); g_dump_bytes += n > 0 ? n : 0; }
++    for (const Quad &a : g_quads) { n = fprintf(g_dump, "Q %d %d %d %d %x\n", a.x0, a.y0, a.x1, a.y1, a.tex); g_dump_bytes += n > 0 ? n : 0; }
++    if (g_dump_bytes > kDumpMax) { fprintf(g_dump, "# limite de tamanho: gravacao parada\n"); fclose(g_dump); g_dump = nullptr; g_dump_on = false; }
++}
++}
++#ifdef _WIN32
++std::wstring diag_session_prefix(void);
++#endif
++bool mui_dump_on(void) { return g_dump_on; }
++bool mui_dump_toggle(void) {
++    if (!g_dump) {
++#ifdef _WIN32
++        g_dump = _wfopen((diag_session_prefix() + L"_mouse.txt").c_str(), L"ab");
++#else
++        g_dump = fopen(getenv("TF_MOUSE_DUMP") ? getenv("TF_MOUSE_DUMP") : "mouse_dump.txt", "ab");
++#endif
++        if (!g_dump) return false;
++        fprintf(g_dump, "# Tag Force Recomp: gravacao do mouse. F = quadro exibido; S = sprite 2D (x0 y0 x1 y1 u0 v0 u1 v1 textura cor);\n"
++                        "# R = linha de texto; Q = quad 3D texturizado (carta); B = botoes do PSP (hex) e mouse 480x272 a partir daquele quadro\n");
++    }
++    g_dump_on = !g_dump_on; g_dump_hash = 0; g_dump_lastb = ~0u;
++    fprintf(g_dump, "# gravacao %s no quadro %llu\n", g_dump_on ? "LIGADA" : "desligada", (unsigned long long)g_dump_frame); fflush(g_dump);
++    return g_dump_on;
++}
++void mui_dump_buttons(uint64_t frame, uint32_t buttons) {
++    g_dump_frame = frame;
++    if (!g_dump_on || !g_dump) return;
++    if (buttons != g_dump_lastb) { g_dump_lastb = buttons; int n = fprintf(g_dump, "B %llu %x %d %d\n", (unsigned long long)frame, buttons, g_dump_mx, g_dump_my); g_dump_bytes += n > 0 ? n : 0; }
++}
++void mui_quad(uint32_t fb, int x0, int y0, int x1, int y1, uint32_t tex) {
++    if (x1 <= 0 || y1 <= 0 || x0 >= 480 || y0 >= 272) return;
++    std::vector<Quad> &v = g_cur_quads[fb & 0x1ffff0u];
++    if (v.size() < 2000) v.push_back({x0, y0, x1, y1, tex});
++}
++
++namespace { void analyze_items(); }
+ void mui_set_frame(uint32_t fb) {
+     std::vector<Spr> &v = g_cur[fb & 0x1ffff0u];
+     g_snap.swap(v); v.clear();
+     std::vector<Run> &r = g_cur_runs[fb & 0x1ffff0u]; g_runs.swap(r); r.clear();
++    std::vector<Quad> &q = g_cur_quads[fb & 0x1ffff0u]; g_quads.swap(q); q.clear();
+     analyze();
++    analyze_items();
++    dump_frame(fb);
+ }
+ 
+ namespace {
+@@ -180,40 +278,264 @@
+ void stab_update() {
+     if (g_sel != g_stab_sel) { g_stab_sel = g_sel; g_stab_n = 0; } else g_stab_n++;
+ }
++void confirm_pulse(uint64_t frame, const char *why, int bar) {
++    g_pending = false; g_pulse = 0x4000; g_pulse_end = frame + 3; g_next_tap = frame + 10; g_tkx = g_tky = -1;
++    if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: confirma barra %d (%s)\n", (unsigned long long)frame, bar, why);
++}
++}
++
++
++/* ---- telas de cartas (nao sao listas de barras): Deck Edit (grade de miniaturas) e a mao no duelo ----
++ * Medido em gravacoes (F4) do jogo europeu:
++ *  - Deck Edit: miniaturas de carta = sprites 2D de 22x30 (desenhados duas vezes, sombra 1 px), grade de passo 28 x 34. O cursor e uma moldura
++ *    de 9 pedacos (uma textura so) em volta da carta, ~4 px de folga; responde ao direcional ~5 quadros depois do aperto.
++ *  - Duelo: as cartas da mao sao quads 3D de ~45x64 lado a lado na base da tela (passo ~47); a selecionada sobe ~13 px e uma maozinha (sprite
++ *    32x32) fica em cima dela, ~17 px a direita da borda da carta. Sem a maozinha o jogador nao esta escolhendo carta (animacao, vez do CPU).
++ * Aqui o mouse so age no CLIQUE (passar o mouse nao mexe o cursor: nessas telas abrem janelinhas que tambem usam o direcional). */
++namespace {
++struct Item { int x0, y0, x1, y1, col, row; };
++std::vector<Item> g_items;    /* cartas clicaveis do quadro exibido */
++int g_isel = -1;              /* carta onde o cursor do jogo esta (-1 = nao da para saber) */
++int g_imode;                  /* 0 = nada, 1 = grade do Deck Edit, 2 = mao do duelo */
++
++/* posicoes parecidas viram uma coluna/linha so (rank em ordem crescente) */
++std::vector<int> ranks(const std::vector<int> &v, int tol) {
++    std::vector<int> u = v; std::sort(u.begin(), u.end());
++    std::vector<int> c; for (int x : u) if (c.empty() || x - c.back() > tol) c.push_back(x);
++    std::vector<int> r(v.size());
++    for (size_t i = 0; i < v.size(); i++) { int k = 0; for (size_t j = 0; j < c.size(); j++) if (v[i] - c[j] >= -tol) k = (int)j; r[i] = k; }
++    return r;
++}
++
++void analyze_items() {
++    g_items.clear(); g_isel = -1; g_imode = 0;
++    if (!g_list.empty()) return;   /* lista de barras tem prioridade */
++    /* 1) Deck Edit: miniaturas 22x30 */
++    std::vector<Item> it;
++    for (const Spr &a : g_snap) {
++        const int w = a.x1 - a.x0, h = a.y1 - a.y0;
++        if (w < 21 || w > 23 || h < 29 || h > 31) continue;
++        bool dup = false; for (Item &b : it) if (std::abs(b.x0 - a.x0) <= 2 && std::abs(b.y0 - a.y0) <= 2) { b.x0 = std::min(b.x0, a.x0); b.y0 = std::min(b.y0, a.y0); dup = true; break; }
++        if (!dup) it.push_back({a.x0, a.y0, a.x0 + w, a.y0 + h, 0, 0});
++    }
++    if (it.size() >= 2) {
++        /* cursor: grupo de sprites da mesma textura que se tocam, cuja caixa envolve exatamente uma miniatura com 2..10 px de folga */
++        std::vector<int> comp(g_snap.size()); for (size_t i = 0; i < comp.size(); i++) comp[i] = (int)i;
++        auto find = [&](int x) { while (comp[x] != x) x = comp[x] = comp[comp[x]]; return x; };
++        for (size_t i = 0; i < g_snap.size(); i++) for (size_t j = i + 1; j < g_snap.size(); j++) {
++            const Spr &a = g_snap[i], &b = g_snap[j];
++            if (a.tex == b.tex && a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1) comp[find((int)i)] = find((int)j);
++        }
++        std::map<int, std::tuple<int, int, int, int, int>> bb;
++        for (size_t i = 0; i < g_snap.size(); i++) {
++            const Spr &a = g_snap[i]; const int w = a.x1 - a.x0, h = a.y1 - a.y0;
++            if (w >= 21 && w <= 23 && h >= 29 && h <= 31) continue;   /* as proprias miniaturas nao sao moldura */
++            auto f = bb.find(find((int)i));
++            if (f == bb.end()) bb[find((int)i)] = std::make_tuple(a.x0, a.y0, a.x1, a.y1, 1);
++            else { auto &t = f->second; std::get<0>(t) = std::min(std::get<0>(t), a.x0); std::get<1>(t) = std::min(std::get<1>(t), a.y0); std::get<2>(t) = std::max(std::get<2>(t), a.x1); std::get<3>(t) = std::max(std::get<3>(t), a.y1); std::get<4>(t)++; }
++        }
++        int cur = -1, found = 0;
++        for (auto &kv : bb) {
++            const int bx0 = std::get<0>(kv.second), by0 = std::get<1>(kv.second), bx1 = std::get<2>(kv.second), by1 = std::get<3>(kv.second);
++            if (std::get<4>(kv.second) < 4) continue;
++            int inside = -1, n = 0;
++            for (size_t i = 0; i < it.size(); i++) {
++                const int l = it[i].x0 - bx0, t = it[i].y0 - by0, r = bx1 - it[i].x1, b = by1 - it[i].y1;
++                if (l >= 2 && l <= 10 && t >= 2 && t <= 10 && r >= 2 && r <= 10 && b >= 2 && b <= 10) { inside = (int)i; n++; }
++            }
++            if (n == 1) { cur = inside; found++; }
++        }
++        std::vector<int> xs, ys; for (const Item &a : it) { xs.push_back(a.x0); ys.push_back(a.y0); }
++        const std::vector<int> cx = ranks(xs, 3), cy = ranks(ys, 3);
++        for (size_t i = 0; i < it.size(); i++) { it[i].col = cx[i]; it[i].row = cy[i]; it[i].x0 -= 3; it[i].x1 += 3; it[i].y0 -= 2; it[i].y1 += 2; }   /* clicavel ate o meio do vao */
++        g_items = it; g_imode = 1; g_isel = found == 1 ? cur : -1;
++        return;
++    }
++    /* 2) Duelo: cartas da mao (quads 3D na base da tela) e do campo, + maozinha 32x32 apontando para a escolhida.
++     * Toda carta e desenhada duas vezes no mesmo retangulo: a moldura comum (uma textura igual para todas) e a arte. A textura da moldura e
++     * descoberta pelas cartas da mao e serve para separar as cartas do campo dos enfeites da mesa (marcadores das zonas, icones). */
++    static uint32_t frame_tex;
++    it.clear();
++    std::vector<int> hand_idx;
++    std::map<uint32_t, int> tex_in_hand;
++    for (const Quad &q : g_quads) {
++        const int w = q.x1 - q.x0, h = q.y1 - q.y0;
++        if (w < 38 || w > 54 || h < 54 || h > 74 || q.y1 < 250) continue;
++        bool dup = false; for (Item &b : it) if (std::abs(b.x0 - q.x0) <= 3) { b.y0 = std::min(b.y0, q.y0); dup = true; break; }
++        if (!dup) it.push_back({q.x0, q.y0, q.x1, std::max(q.y1, 272), 0, 1000});
++    }
++    if (it.size() >= 2) {   /* a moldura e a textura que aparece em todas as cartas da mao */
++        for (const Quad &q : g_quads) { const int w = q.x1 - q.x0, h = q.y1 - q.y0; if (w >= 38 && w <= 54 && h >= 54 && h <= 74 && q.y1 >= 250) tex_in_hand[q.tex]++; }
++        for (auto &kv : tex_in_hand) if (kv.second >= (int)it.size()) { frame_tex = kv.first; break; }
++    }
++    const size_t nhand = it.size();
++    if (frame_tex) for (const Quad &q : g_quads) {   /* cartas no campo: retangulos com a moldura, menores que as da mao, entre a mao do oponente e a sua */
++        const int w = q.x1 - q.x0, h = q.y1 - q.y0;
++        if (q.tex != frame_tex || w < 16 || w > 40 || h < 12 || h > 40 || q.y1 < 72 || q.y0 > 214) continue;
++        bool dup = false; for (Item &b : it) if (std::abs(b.x0 - q.x0) <= 2 && std::abs(b.y0 - q.y0) <= 2) { dup = true; break; }
++        if (!dup) it.push_back({q.x0, q.y0, q.x1, q.y1, 0, 0});
++    }
++    if (it.size() < 2 && nhand < 2) return;
++    /* fileiras do campo: y parecido = mesma fileira (de cima para baixo); a mao e a ultima */
++    {
++        std::vector<int> ys; std::vector<size_t> fi;
++        for (size_t i = nhand; i < it.size(); i++) { ys.push_back((it[i].y0 + it[i].y1) / 2); fi.push_back(i); }
++        const std::vector<int> ry = ranks(ys, 9);
++        for (size_t k = 0; k < fi.size(); k++) it[fi[k]].row = ry[k];
++    }
++    std::sort(it.begin(), it.end(), [](const Item &a, const Item &b) { return a.row != b.row ? a.row < b.row : a.x0 < b.x0; });
++    int cur = -1, best = 1 << 30;
++    for (const Spr &a : g_snap) {
++        if (a.x1 - a.x0 != 32 || a.y1 - a.y0 != 32) continue;
++        for (size_t i = 0; i < it.size(); i++) {
++            const int dx = a.x0 - it[i].x0, dy = a.y0 - it[i].y0;
++            if (dx < 8 || dx > 24 || dy < -18 || dy > 10) continue;
++            const int d = std::abs(dx - 16) + std::abs(dy + 4);
++            if (d < best) { best = d; cur = (int)i; }
++        }
++    }
++    /* coluna = ordem dentro da fileira */
++    for (size_t i = 0; i < it.size(); i++) { int c = 0; for (size_t j = 0; j < it.size(); j++) if (it[j].row == it[i].row && it[j].x0 < it[i].x0) c++; it[i].col = c; }
++    for (Item &a : it) if (a.row == 1000) a.y0 = std::min(a.y0, 210);   /* mao: clicavel do topo da carta levantada ate a borda da tela */
++    for (size_t i = 0; i + 1 < it.size(); i++) if (it[i].row == it[i + 1].row && it[i].x1 > it[i + 1].x0) { const int m = (it[i].x1 + it[i + 1].x0) / 2; it[i].x1 = m; it[i + 1].x0 = m; }
++    g_items = it; g_imode = 2; g_isel = cur;
++}
++
++int g_istab_sel = -2, g_istab_n, g_burst_from = -1;
++int g_burst_axis, g_blocked_axis;   /* 1 = horizontal, 2 = vertical: eixo da ultima rajada / eixo em que o cursor nao andou */
++uint32_t update_items(uint64_t frame, bool inside, int mx, int my, bool l_edge, uint32_t user_dpad, bool *eat_cross, uint32_t out) {
++    if (g_isel != g_istab_sel) { g_istab_sel = g_isel; g_istab_n = 0; } else g_istab_n++;
++    if (g_isel >= 0) g_sel_seen = frame;
++    int hover = -1;
++    if (inside) for (size_t i = 0; i < g_items.size(); i++) if (mx >= g_items[i].x0 && mx < g_items[i].x1 && my >= g_items[i].y0 && my < g_items[i].y1) hover = (int)i;
++    if (user_dpad) { g_tkx = g_tky = -1; g_pending = false; return out; }
++    int tgt = -1; for (size_t i = 0; i < g_items.size(); i++) if (g_items[i].col == g_tkx && g_items[i].row == g_tky) tgt = (int)i;
++    if (l_edge && hover >= 0 && g_isel >= 0) {
++        g_tkx = g_items[hover].col; g_tky = g_items[hover].row; g_taps = 0; trim_burst(frame);
++        tgt = hover; g_pending = true; g_pending_until = frame + 150; *eat_cross = true; g_blocked_axis = 0; g_burst_from = -1;
++        if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: clique na carta %d (coluna %d, linha %d); cursor na %d\n", (unsigned long long)frame, hover, g_tkx, g_tky, g_isel);
++    }
++    if (g_pending && frame > g_pending_until) g_pending = false;
++    if (tgt < 0 || !g_pending) { g_tkx = g_tky = -1; g_pending = false; return out; }
++    if (burst_running(frame)) return out;
++    if (g_burst_n) { g_burst_end = g_burst_start + (uint64_t)g_burst_n * g_period; g_burst_n = 0; }
++    if (frame < g_pulse_end + 2 || frame < g_next_tap) return out;
++    if (g_isel < 0) { if (frame - g_sel_seen >= 12) { g_pending = false; g_tkx = g_tky = -1; } return out; }   /* cursor sumiu (janela, animacao): desiste */
++    if (g_istab_n < 2 || frame < g_burst_end + kSettle) return out;
++    if (g_burst_from >= 0) {
++        /* a ultima rajada nao mexeu o cursor: ou aquele eixo esta bloqueado (linha incompleta no fim da grade: tenta o outro eixo), ou outra coisa
++         * esta usando o direcional (janelinha aberta: os dois eixos falham, desiste sem confirmar nada) */
++        const bool moved = g_isel != g_burst_from; g_burst_from = -1;
++        if (moved) g_blocked_axis = 0;
++        else if (tgt != g_isel) {
++            if (g_blocked_axis && g_blocked_axis != g_burst_axis) { g_pending = false; g_tkx = g_tky = -1; g_blocked_axis = 0; if (g_mtrace) fprintf(stderr, "[mouse] o cursor nao andou: desisti\n"); return out; }
++            g_blocked_axis = g_burst_axis;
++        }
++    }
++    if (tgt == g_isel) { confirm_pulse(frame, "carta", tgt); return g_pulse; }
++    if (g_taps >= 10) { g_pending = false; g_tkx = g_tky = -1; return out; }
++    const Item &t = g_items[tgt], &c = g_items[g_isel];
++    const int dx = t.col - c.col, dy = t.row - c.row;
++    int axis = dx && g_blocked_axis != 1 ? 1 : dy && g_blocked_axis != 2 ? 2 : 0;
++    if (g_imode == 2 && dy && g_blocked_axis != 2) axis = 2;   /* duelo: primeiro chega na fileira certa */
++    if (!axis) { g_pending = false; g_tkx = g_tky = -1; g_blocked_axis = 0; if (g_mtrace) fprintf(stderr, "[mouse] sem caminho ate a carta: desisti\n"); return out; }
++    if (axis == 1) { g_burst_dir = dx > 0 ? 0x20 : 0x80; g_burst_n = std::abs(dx); }
++    else { g_burst_dir = dy > 0 ? 0x40 : 0x10; g_burst_n = g_imode == 2 ? 1 : std::abs(dy); }   /* duelo: as fileiras tem buracos e o jogo escolhe a coluna ao trocar de fileira: um passo por vez */
++    g_burst_axis = axis; g_burst_start = frame; g_taps++; g_burst_from = g_isel;
++    if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: carta %d -> %d, rajada de %d (%02x)\n", (unsigned long long)frame, g_isel, tgt, g_burst_n, g_burst_dir);
++    return out | g_burst_dir;
++}
+ }
+ 
+ uint32_t mui_update(uint64_t frame, bool inside, int mx, int my, bool l_edge, bool l_down, uint32_t user_dpad, bool *eat_cross) {
++    (void)l_down;
+     *eat_cross = false;
+     const bool moved = inside && (mx != g_lmx || my != g_lmy);
+     if (inside) { g_lmx = mx; g_lmy = my; }
++    if (g_sel >= 0) g_sel_seen = frame;
+     uint32_t out = frame < g_pulse_end ? g_pulse : 0;
+-    if (g_burst_n && frame >= g_burst_start && frame < g_burst_start + (uint64_t)g_burst_n * g_period && (frame - g_burst_start) % (uint64_t)g_period < (uint64_t)g_period / 2) out |= g_burst_dir;
+-    if (g_list.empty()) { g_tkx = g_tky = -1; g_pending = false; return out; }
++    if (burst_running(frame) && frame >= g_burst_start && (frame - g_burst_start) % (uint64_t)g_period < (uint64_t)g_period / 2) out |= g_burst_dir;
++    if (g_list.empty()) {
++        if (!g_items.empty()) return update_items(frame, inside, mx, my, l_edge, user_dpad, eat_cross, out);
++        g_tkx = g_tky = -1; g_pending = false; return out;
++    }
+     stab_update();
+     int hover = -1;
+     if (inside) for (size_t i = 0; i < g_list.size(); i++) if (mx >= g_list[i].x0 && mx < g_list[i].x1 && my >= g_list[i].y0 && my < g_list[i].y1) hover = (int)i;
++    if (hover >= 0 && hover < (int)g_skip.size() && g_skip[hover]) {
++        /* item apagado: o jogo nao deixa seleciona-lo. Nao vira alvo, e um clique nele nao faz nada (nao confirma o item que estiver selecionado) */
++        if (l_edge) *eat_cross = true;
++        hover = -1;
++    }
+     if (user_dpad) { g_tkx = g_tky = -1; g_pending = false; return out; }   /* o jogador voltou ao teclado/controle */
+-    if ((moved || l_edge) && hover >= 0) { g_tkx = g_list[hover].x0; g_tky = g_list[hover].y0; g_taps = 0; g_burst_n = 0; }
+-    if (l_edge && hover >= 0) { g_pending = true; g_pending_until = frame + 120; }
+-    if (l_down && hover >= 0 && g_sel >= 0) *eat_cross = true;   /* quem confirma e este modulo, quando a selecao chegar */
+-    if (g_pending && frame > g_pending_until) g_pending = false;
+     int tgt = -1; for (size_t i = 0; i < g_list.size(); i++) if (g_list[i].x0 == g_tkx && g_list[i].y0 == g_tky) tgt = (int)i;
++    if (l_edge && hover >= 0) {
++        /* clique numa barra: este modulo e dono do clique (quem confirma e ele, quando a selecao chegar); o X cru fica bloqueado ate soltar o botao */
++        if (hover != tgt) set_target(hover, frame);
++        tgt = hover; g_pending = true; g_pending_until = frame + 120; *eat_cross = true;
++    } else if (moved && hover >= 0 && hover != tgt && !g_pending) {
++        /* so passar o mouse: leva a selecao ate a barra. Mexer DENTRO da mesma barra nao reinicia nada; com um clique pendente o alvo fica
++         * travado (o mouse escorregar para a vizinha nao muda o item que vai ser confirmado) */
++        set_target(hover, frame); tgt = hover;
++    }
++    if (g_pending && frame > g_pending_until) g_pending = false;
+     if (tgt < 0) { g_pending = false; return out; }
+-    if (g_burst_n && frame < g_burst_start + (uint64_t)g_burst_n * g_period) return out;   /* rajada em andamento */
++    if (burst_running(frame)) return out;   /* rajada em andamento */
+     if (g_burst_n) { g_burst_end = g_burst_start + (uint64_t)g_burst_n * g_period; g_burst_n = 0; }
+-    if (g_sel < 0 || frame < g_pulse_end + 2 || frame < g_next_tap) return out;
++    if (frame < g_pulse_end + 2 || frame < g_next_tap) return out;
++    if (g_sel < 0) {
++        /* nao da para saber qual barra esta selecionada. Se ela sumiu ha pouco (animacao, piscada do realce), espera ela voltar; so se ficar
++         * desconhecida por 12 quadros seguidos (ou se nesta tela ela nunca aparece) faz o que um clique comum faria (X), como antes */
++        if (g_pending && frame - g_sel_seen >= 12) { confirm_pulse(frame, "selecao desconhecida", tgt); out |= g_pulse; }
++        return out;
++    }
+     if (g_stab_n < 2) return out;   /* espera o desenho refletir o ultimo aperto */
++    /* o realce atrasa alguns quadros em relacao ao aperto: logo depois de uma rajada a barra desenhada como selecionada ainda pode ser a de antes
++     * (confirmar ai abriria o item errado; corrigir ai daria passos a mais). So decide depois de esperar */
++    if (frame < g_burst_end + kSettle) return out;
+     if (tgt == g_sel) {
+-        if (g_pending) { g_pending = false; g_pulse = 0x4000; g_pulse_end = frame + 3; g_next_tap = frame + 10; out = g_pulse; if (g_mtrace) fprintf(stderr, "[mouse] confirma barra %d\n", tgt); }
+-        g_tkx = g_tky = -1;
++        if (g_pending) { confirm_pulse(frame, "selecao chegou", tgt); out = g_pulse; }
++        else g_tkx = g_tky = -1;
+         return out;
+     }
+-    if (frame < g_burst_end + 12) return out;   /* o realce atrasa alguns quadros em relacao ao aperto: so corrige uma rajada que nao chegou depois de esperar */
+-    if (g_taps >= 6) { g_tkx = g_tky = -1; g_pending = false; return out; }   /* nao esta chegando (deteccao errada): desiste */
++    if (g_taps >= 6) { g_tkx = g_tky = -1; g_pending = false; if (g_mtrace) fprintf(stderr, "[mouse] desisti da barra %d\n", tgt); return out; }   /* nao esta chegando (deteccao errada): desiste */
+     /* rajada: um aperto por item no ritmo mais rapido que o jogo aceita (o jogo le o controle a cada 2 quadros); cada passo toca o som e o realce do jogo */
+     const Bar &t = g_list[tgt], &s = g_list[g_sel];
+     g_burst_dir = t.y0 != s.y0 ? (t.y0 < s.y0 ? 0x10 : 0x40) : (t.x0 < s.x0 ? 0x80 : 0x20);
+-    g_burst_n = std::abs(tgt - g_sel); g_burst_start = frame; g_taps++;
++    int steps = 0;   /* um aperto por barra ate o alvo, sem contar as apagadas (o jogo as pula) */
++    for (int i = std::min(tgt, g_sel); i <= std::max(tgt, g_sel); i++) if (i != g_sel && !(i < (int)g_skip.size() && g_skip[i])) steps++;
++    g_burst_n = std::max(1, steps); g_burst_start = frame; g_taps++;
+     if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: selecionada %d -> alvo %d, rajada de %d (%02x)\n", (unsigned long long)frame, g_sel, tgt, g_burst_n, g_burst_dir);
+-    return g_burst_dir;
++    return out | g_burst_dir;
++}
++
++/* ---- botoes do mouse -> botoes do PSP ---- */
++namespace {
++const uint32_t kMouseBit[MUI_NB] = {0x4000, 0x2000, 0x1000, 0x100, 0x200};   /* esquerdo = X, direito = O, meio = triangulo, laterais = L / R */
++const int kMinHold = 3;   /* o jogo le o controle a cada 2 quadros: um clique mais curto que isso pode passar entre duas leituras */
++bool g_mprev[MUI_NB]; uint64_t g_mhold_until[MUI_NB]; bool g_owned;
++}
++
++uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_dpad) {
++    g_dump_mx = m.inside ? m.mx : -1; g_dump_my = m.inside ? m.my : -1;
++    bool down[MUI_NB], edge[MUI_NB];
++    for (int i = 0; i < MUI_NB; i++) {
++        const bool raw = m.in_client && m.down[i];
++        bool e = raw && !g_mprev[i];
++        /* clique inteiro entre duas leituras (a janela viu WM_xBUTTONDOWN, mas o botao ja estava solto aqui): vale como aperto. Se o botao estava
++         * apertado na leitura anterior (ou o aperto esticado ainda vale), esse clique ja foi contado */
++        if (!e && m.clicked[i] && !raw && !g_mprev[i] && frame >= g_mhold_until[i]) e = true;
++        if (e) g_mhold_until[i] = frame + kMinHold;
++        edge[i] = e; down[i] = raw || frame < g_mhold_until[i];
++        g_mprev[i] = raw;
++    }
++    uint32_t b = 0;
++    if (menus) {
++        bool eat = false;
++        b |= mui_update(frame, m.inside, m.mx, m.my, edge[MUI_BL], down[MUI_BL], user_dpad, &eat);
++        if (edge[MUI_BL]) g_owned = eat;
++    } else if (edge[MUI_BL]) g_owned = false;
++    if (!down[MUI_BL]) g_owned = false;
++    for (int i = 0; i < MUI_NB; i++) if (down[i] && !(i == MUI_BL && g_owned)) b |= kMouseBit[i];
++    return b;
+ }
+diff -ruN -x '*.o' orig/runtime/mouse_ui.h src/tagforcerecomp-preview-master/runtime/mouse_ui.h
+--- a/runtime/mouse_ui.h	2026-10-18 21:05:35.920979270 +0000
++++ b/runtime/mouse_ui.h	2026-10-18 22:08:49.656138241 +0000
+@@ -12,6 +12,22 @@
+ /* sceDisplaySetFrameBuf: o buffer vira o quadro exibido; seus sprites viram a tela atual */
+ void mui_set_frame(uint32_t fb);
+ /* uma vez por quadro (leitura do teclado/mouse). (mx,my) = mouse em coordenadas 480x272 (inside = sobre a imagem), l_edge = clique esquerdo novo,
+- * l_down = botao esquerdo apertado, user_dpad = direcional que o jogador esta apertando de verdade. Devolve botoes do PSP a acrescentar;
+- * *eat_cross = true: o clique esquerdo NAO deve virar X por conta propria (o modulo confirma quando a selecao chegar na barra). */
++ * l_down = botao esquerdo apertado (nao usado), user_dpad = direcional que o jogador esta apertando de verdade. Devolve botoes do PSP a acrescentar;
++ * *eat_cross = true (so no quadro do clique): o modulo tomou este clique; ele NAO deve virar X ate o botao ser solto (o modulo confirma quando a
++ * selecao chegar na barra). */
+ uint32_t mui_update(uint64_t frame, bool inside, int mx, int my, bool l_edge, bool l_down, uint32_t user_dpad, bool *eat_cross);
++
++/* Botoes do mouse do esquema de PC (esquerdo = X, direito = O, meio = triangulo, laterais = L/R), mais o mouse nos menus. Uma vez por quadro.
++ * down[] = botao (logico) apertado agora; clicked[] = a janela recebeu WM_xBUTTONDOWN desde a leitura anterior (pega o clique curto que comeca e
++ * termina entre duas leituras). Garante que todo clique fica apertado pelo menos alguns quadros (o jogo le o controle a cada 2) e que um clique
++ * tomado pelo mouse nos menus nunca vira X por conta propria (nem depois que a tela troca, com o botao ainda apertado). */
++enum { MUI_BL, MUI_BR, MUI_BM, MUI_BX1, MUI_BX2, MUI_NB };
++struct MuiMouse { bool in_client, inside; int mx, my; bool down[MUI_NB], clicked[MUI_NB]; };
++uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_dpad);
++
++/* Gravacao para desenvolver o mouse em telas que nao sao listas (Deck Edit, duelo): F4 liga/desliga. Grava, por quadro exibido, os sprites 2D,
++ * as linhas de texto e os quads 3D texturizados (cartas), mais os botoes e o mouse, em logs/<sessao>_mouse.txt. */
++void mui_quad(uint32_t fb, int x0, int y0, int x1, int y1, uint32_t tex);   /* quad 3D texturizado (carta no campo...), retangulo na tela */
++bool mui_dump_toggle(void);    /* devolve o estado novo */
++bool mui_dump_on(void);
++void mui_dump_buttons(uint64_t frame, uint32_t buttons);   /* uma vez por quadro: botoes do PSP que foram para o jogo */
+diff -ruN -x '*.o' orig/tools/teste_mouse/aleatorio.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/aleatorio.cpp
+--- a/tools/teste_mouse/aleatorio.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/aleatorio.cpp	2026-10-18 21:11:39.472597425 +0000
+@@ -0,0 +1,32 @@
++#include "mouse_ui.h"
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++#include <random>
++// Um clique por execucao: o mouse vagueia pela lista (com tremor), clica num item com duracao aleatoria, escorrega depois.
++int main(int argc,char**argv){
++  int seed=atoi(argv[1]); std::mt19937 rng(seed);
++  int n=2+rng()%6, lag=1+rng()%4, close_anim=rng()%12; bool blink=rng()%3==0;
++  int sel=rng()%n, screen=0, closing=0; std::vector<int> hist; uint32_t prev=0, b=0;
++  int wander_until=20+rng()%80, clickf=wander_until, hold=1+rng()%25; int target=rng()%n;
++  int cur=rng()%n; std::vector<std::pair<int,int>> conf; 
++  for(int f=1;f<400;f++){
++    hist.push_back(sel); int ds=hist.size()>(size_t)lag?hist[hist.size()-1-lag]:hist[0];
++    if(closing>0)closing--;
++    if(screen==0||closing>0) for(int i=0;i<n;i++){ uint32_t tex=(i==ds&&!(blink&&(f%11)>=9))?2:1; int y=50+i*30;
++      mui_prim(0,100,y,116,y+20,0,0,16,20,tex,0); mui_prim(0,116,y,284,y+20,16,0,32,20,tex,0); mui_prim(0,284,y,300,y+20,32,0,48,20,tex,0);}
++    mui_set_frame(0);
++    if(f<wander_until && rng()%6==0) cur=rng()%n;
++    int item = f<clickf?cur: (f<clickf+hold+3?target: (int)(rng()%n));
++    int mx=110+rng()%180, my=50+item*30+2+rng()%16;
++    bool down=f>=clickf&&f<clickf+hold;
++    MuiMouse m{}; m.in_client=m.inside=true; m.mx=mx; m.my=my; m.down[0]=down; m.clicked[0]=(f==clickf);
++    b=mui_mouse(f,m,true,0);
++    if(f%2==0){ uint32_t e=b&~prev; prev=b;
++      if(screen==0){ if(e&0x10&&sel>0)sel--; if(e&0x40&&sel<n-1)sel++; if(e&0x4000){conf.push_back({sel,0}); screen=1; closing=close_anim;} }
++      else if(e&0x4000) conf.push_back({-1,1}); }
++  }
++  bool ok = conf.size()==1 && conf[0].first==target;
++  printf("%d %d n=%d lag=%d anim=%d blink=%d hold=%d alvo=%d conf=",ok,seed,n,lag,close_anim,blink,hold,target);
++  for(auto&c:conf)printf("%d ",c.first); printf("\n");
++}
+diff -ruN -x '*.o' orig/tools/teste_mouse/apagados.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/apagados.cpp
+--- a/tools/teste_mouse/apagados.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/apagados.cpp	2026-10-18 21:58:48.479798445 +0000
+@@ -0,0 +1,37 @@
++#include "mouse_ui.h"
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++#include <random>
++// Menu com itens APAGADOS (o jogo os pula no direcional), como o menu principal do Tag Force (Free Duel / Network Mode).
++// modo 0: mouse vagueia e clica num item habilitado (deve confirmar ele, uma vez)
++// modo 1: so passa o mouse e para num item habilitado (a selecao deve parar nele, sem ficar pulando)
++int main(int argc,char**argv){
++  int seed=atoi(argv[1]); int modo=argc>2?atoi(argv[2]):0; std::mt19937 rng(seed);
++  int n=4+rng()%6, lag=1+rng()%4, close_anim=rng()%12;
++  std::vector<bool> dis(n,false); int nd=rng()%3; for(int k=0;k<nd;k++) dis[1+rng()%(n-2)]=true;
++  auto pick=[&](){ int i; do i=rng()%n; while(dis[i]); return i; };
++  int sel=pick(), screen=0, closing=0; std::vector<int> hist; uint32_t prev=0, b=0;
++  int wander_until=60+rng()%80, clickf=wander_until, hold=1+rng()%25; int target=pick();
++  int cur=rng()%n; std::vector<int> conf; int moves=0;
++  bool wrap=rng()%2; auto step=[&](int d){ int i=sel; for(int k=0;k<n;k++){ i+=d; if(wrap) i=(i+n)%n; if(i<0||i>=n) return; if(!dis[i]) break; } sel=i; moves++; };
++  for(int f=1;f<40;f++){ for(int i=0;i<3;i++){ uint32_t tex=i==0?2:1; int y=150+i*26; mui_prim(0,140,y,156,y+20,0,0,16,20,tex,0); mui_prim(0,156,y,324,y+20,16,0,32,20,tex,0); mui_prim(0,324,y,340,y+20,32,0,48,20,tex,0);} mui_set_frame(0); MuiMouse m{}; mui_mouse(f,m,true,0); }
++  for(int f=40;f<540;f++){
++    hist.push_back(sel); int ds=hist.size()>(size_t)lag?hist[hist.size()-1-lag]:hist[0];
++    if(closing>0)closing--;
++    if(screen==0||closing>0) for(int i=0;i<n;i++){ uint32_t tex=dis[i]?3:(i==ds?2:1); int y=40+i*26;
++      mui_prim(0,100,y,116,y+20,0,0,16,20,tex,0); mui_prim(0,116,y,284,y+20,16,0,32,20,tex,0); mui_prim(0,284,y,300,y+20,32,0,48,20,tex,0);}
++    mui_set_frame(0);
++    if(f<wander_until && rng()%6==0) cur=rng()%n;
++    int item; if(modo==0) item = f<clickf?cur: (f<clickf+hold+3?target: (int)(rng()%n)); else item = f<wander_until?cur:target;
++    int mx=110+rng()%180, my=40+item*26+2+rng()%16;
++    bool down= modo==0 && f>=clickf&&f<clickf+hold;
++    MuiMouse m{}; m.in_client=m.inside=true; m.mx=mx; m.my=my; m.down[0]=down; m.clicked[0]=down&&f==clickf;
++    b=mui_mouse(f,m,true,0);
++    if(f%2==0){ uint32_t e=b&~prev; prev=b;
++      if(screen==0){ if(e&0x10)step(-1); if(e&0x40)step(1); if(e&0x4000){conf.push_back(sel); screen=1; closing=close_anim;} }
++      else if(e&0x4000) conf.push_back(-1); }
++  }
++  bool ok = modo==0 ? (conf.size()==1 && conf[0]==target) : (conf.empty() && sel==target);
++  int ideal=0; printf("%d %d modo=%d n=%d apagados=%d wrap=%d lag=%d conf=",ok,seed,modo,n,nd,(int)wrap,lag); for(int c:conf)printf("%d ",c); printf("sel=%d alvo=%d passos=%d\n",sel,target,moves);
++}
+diff -ruN -x '*.o' orig/tools/teste_mouse/campo.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/campo.cpp
+--- a/tools/teste_mouse/campo.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/campo.cpp	2026-10-18 23:04:36.738935413 +0000
+@@ -0,0 +1,42 @@
++// Simula o campo do duelo com a geometria medida (F4): monstros do oponente, seus monstros, suas magicas/armadilhas e a mao.
++// Modelo do jogo: cima/baixo vai para a fileira vizinha que tem carta, na carta de x mais proximo; esquerda/direita anda na fileira.
++#include "mouse_ui.h"
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++#include <random>
++#include <algorithm>
++struct C { int row, x, y, w, h, px, py; };   // px,py = deslocamento da maozinha
++int main(int argc,char**argv){
++  int seed=atoi(argv[1]); std::mt19937 rng(seed); int lag=3+rng()%3;
++  std::vector<C> cs;
++  int zx[5]={183,226,270,314,357};
++  auto zone=[&](int row,int z){ if(row==0) cs.push_back({0,zx[z]-17+0,102,33,15,17,-3}); if(row==1) cs.push_back({1,zx[z]-14,143,28,27,14,2}); if(row==2) cs.push_back({2,zx[z]-15,176,30,32,15,5}); };
++  for(int r=0;r<3;r++) for(int z=0;z<5;z++) if(rng()%2) zone(r,z);
++  int nh=3+rng()%4, hx0=240-nh*47/2; for(int i=0;i<nh;i++) cs.push_back({3,hx0+47*i,219,45,64,17,-13});
++  int n=cs.size();
++  auto rowcards=[&](int r){ std::vector<int> v; for(int i=0;i<n;i++) if(cs[i].row==r) v.push_back(i); std::sort(v.begin(),v.end(),[&](int a,int b){return cs[a].x<cs[b].x;}); return v; };
++  int sel; { auto h=rowcards(3); sel=h[rng()%h.size()]; }
++  int target=rng()%n; int clickf=40+rng()%30;
++  std::vector<int> hist; uint32_t prev=0; int xs=0, moves=0; bool wrongx=false;
++  for(int f=1;f<700;f++){
++    hist.push_back(sel); int ds=hist.size()>(size_t)lag?hist[hist.size()-1-lag]:hist[0];
++    for(int i=0;i<n;i++){ const C&c=cs[i]; int y=c.y-(c.row==3&&i==ds?13:0);
++      mui_quad(0,c.x,y,c.x+c.w,y+c.h,0x98b4e40); mui_quad(0,c.x,y,c.x+c.w,y+c.h,0x9d00000+i*0x800); }
++    mui_quad(0,281,125,313,141,0x99f08c0); mui_quad(0,281,125,313,141,0x99f2080);   // enfeite da mesa (nao e carta)
++    mui_quad(0,280,36,301,65,0x98b4e40);                                            // mao do oponente (nao clicavel)
++    { const C&c=cs[ds]; int y=c.y-(c.row==3?13:0); mui_prim(0,c.x+c.px,y+c.py+(c.row==3?13:0),c.x+c.px+32,y+c.py+(c.row==3?13:0)+32,64,96,96,128,0x9925340,0); }
++    mui_set_frame(0);
++    const C&t=cs[target]; int mx=t.x+t.w/2, my=(t.row==3? 250 : t.y+t.h/2);
++    MuiMouse m{}; m.in_client=m.inside=true; m.mx=f<clickf?5:mx; m.my=f<clickf?5:my; m.down[0]=f>=clickf&&f<clickf+4; m.clicked[0]=f==clickf;
++    uint32_t b=mui_mouse(f,m,true,0);
++    if(f%2==0){ uint32_t e=b&~prev; prev=b; int old=sel;
++      if(e&0xa0){ auto v=rowcards(cs[sel].row); int k=std::find(v.begin(),v.end(),sel)-v.begin(); if(e&0x20&&k+1<(int)v.size()) sel=v[k+1]; if(e&0x80&&k>0) sel=v[k-1]; }
++      if(e&0x50){ int d=(e&0x40)?1:-1; for(int r=cs[sel].row+d;r>=0&&r<=3;r+=d){ auto v=rowcards(r); if(v.empty()) continue; int bi=v[0]; for(int i:v) if(std::abs(cs[i].x+cs[i].w/2-(cs[sel].x+cs[sel].w/2))<std::abs(cs[bi].x+cs[bi].w/2-(cs[sel].x+cs[sel].w/2))) bi=i; sel=bi; break; } }
++      if(sel!=old) moves++;
++      if(e&0x4000){ xs++; if(sel!=target) wrongx=true; }
++    }
++  }
++  bool ok = xs==1 && sel==target && !wrongx;
++  printf("%d %d cartas=%d linha_alvo=%d alvo=%d final=%d X=%d passos=%d\n",ok,seed,n,cs[target].row,target,sel,xs,moves);
++}
+diff -ruN -x '*.o' orig/tools/teste_mouse/cartas.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/cartas.cpp
+--- a/tools/teste_mouse/cartas.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/cartas.cpp	2026-10-18 22:34:07.484373925 +0000
+@@ -0,0 +1,52 @@
++// Simula o Deck Edit (grade 11x4, 42 cartas) e a mao do duelo (4..6 cartas) com a geometria e o atraso medidos nas gravacoes F4.
++// modo 0 = Deck Edit, 1 = mao do duelo, 2 = mao com janelinha aberta (o direcional mexe a janela, nao o cursor; X confirma a janela)
++#include "mouse_ui.h"
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++#include <random>
++int main(int argc,char**argv){
++  int seed=atoi(argv[1]), modo=atoi(argv[2]); std::mt19937 rng(seed);
++  int lag=3+rng()%4;
++  int ncards = modo==0 ? 30+rng()%13 : 4+rng()%3;   // Deck Edit: 30..42 cartas; mao: 4..6
++  int cols = modo==0 ? 11 : ncards;
++  int sel=rng()%ncards; std::vector<int> hist; uint32_t prev=0;
++  int target; do target=rng()%ncards; while(modo==2 && target==sel);
++  int clickf=40+rng()%40, hold=2+rng()%15;
++  int xs=0, popup_moves=0, cursor_moves=0, at_click=-1;
++  for(int f=1;f<520;f++){
++    hist.push_back(sel); int ds=hist.size()>(size_t)lag?hist[hist.size()-1-lag]:hist[0];
++    if(modo==0){
++      for(int i=0;i<ncards;i++){ int x=156+28*(i%11), y=46+34*(i/11); mui_prim(0,x,y,x+22,y+30,0,0,22,30,0x9a00000+(i%5)*0x40000,0); mui_prim(0,x+1,y+1,x+23,y+31,0,0,22,30,0x9a00000+(i%5)*0x40000,0); }
++      int x=156+28*(ds%11)-4, y=46+34*(ds/11)-4, X=x+33, Y=y+41; uint32_t T=0x9cb2de0;
++      mui_prim(0,x,y,x+6,y+6,213,122,219,128,T,0); mui_prim(0,X-6,y,X,y+6,250,122,256,128,T,0); mui_prim(0,x,Y-6,x+6,Y,213,159,219,165,T,0); mui_prim(0,X-6,Y-6,X,Y,250,159,256,165,T,0);
++      mui_prim(0,x,y+6,x+6,Y-6,213,128,219,129,T,0); mui_prim(0,X-6,y+6,X,Y-6,250,128,256,129,T,0); mui_prim(0,x+6,y,X-6,y+6,219,122,220,128,T,0); mui_prim(0,x+6,Y-6,X-6,Y,219,159,220,165,T,0);
++    } else {
++      int x0=240-ncards*47/2;
++      for(int i=0;i<ncards;i++){ int x=x0+47*i, y=(i==ds)?206:219; mui_quad(0,x,y,x+45,y+64,0x98b4e40); mui_quad(0,x,y,x+45,y+64,0x98b4e40); }
++      mui_prim(0,x0+47*ds+17,193,x0+47*ds+49,225,0,0,32,32,0x9925340,0);   // maozinha
++    }
++    mui_set_frame(0);
++    // mouse: em cima do alvo a partir do clique
++    int tx,ty; if(modo==0){ tx=156+28*(target%11)+11; ty=46+34*(target/11)+15; } else { int x0=240-ncards*47/2; tx=x0+47*target+22; ty=245; }
++    MuiMouse m{}; m.in_client=m.inside=true; m.mx=f<clickf?10:tx; m.my=f<clickf?10:ty; m.down[0]=f>=clickf&&f<clickf+hold; m.clicked[0]=f==clickf;
++    uint32_t b=mui_mouse(f,m,true,0);
++    if(f==clickf) at_click=sel;
++    if(f%2==0){ uint32_t e=b&~prev; prev=b;
++      if(modo==2){ if(e&0xf0) popup_moves++; if(e&0x4000) xs++; }
++      else {
++        int r=sel/cols, c=sel%cols, old=sel;
++        if(e&0x20 && c<cols-1 && sel+1<ncards) sel++;
++        if(e&0x80 && c>0) sel--;
++        if(e&0x40 && modo==0 && r<3){ sel=std::min(ncards-1, sel+11); }
++        if(e&0x10 && modo==0 && r>0) sel-=11;
++        if(sel!=old) cursor_moves++;
++        if(e&0x4000){ xs++; if(sel!=target) printf("X FORA DO ALVO "); }
++      }
++    }
++  }
++  bool ok;
++  if(modo==2) ok = xs==0;   // janelinha: nada de X, e desiste logo
++  else ok = xs==1 && sel==target;
++  printf("%d %d modo=%d cartas=%d lag=%d de=%d alvo=%d final=%d X=%d passos=%d janela=%d\n",ok,seed,modo,ncards,lag,at_click,target,sel,xs,cursor_moves,popup_moves);
++}
+diff -ruN -x '*.o' orig/tools/teste_mouse/cenarios.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/cenarios.cpp
+--- a/tools/teste_mouse/cenarios.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/cenarios.cpp	2026-10-18 21:11:39.472536522 +0000
+@@ -0,0 +1,79 @@
++// Simulador: um "jogo" PSP com uma lista vertical de barras, lido pelo modulo do mouse do mesmo jeito que no runtime.
++#include "mouse_ui.h"
++#include <cstdio>
++#include <vector>
++#include <functional>
++#include <string>
++#include <cstdlib>
++struct Ev { bool inside=false; int mx=0,my=0; bool ldown=false; bool lclick=false; };
++struct Result { std::vector<std::pair<int,int>> confirms; /* (item, tela) */ int final_sel; int moves; };
++struct Game; static int bar_y(int i){ return 50+i*30; }
++static int center_y(int i){ return bar_y(i)+10; }
++struct Game {
++  int n=5, sel=0, screen=0, lag=2; int closing=0; static int close_anim; std::vector<int> hist; uint32_t prevpoll=0; int moves=0;
++  std::function<bool(int)> blink=[](int){return false;};
++  Result r;
++  void draw(int f){
++    hist.push_back(sel);
++    int ds = hist.size()>(size_t)lag ? hist[hist.size()-1-lag] : hist[0];
++    uint32_t fb=0x04000000;
++    if(closing>0) closing--;
++    if(screen==0 || closing>0) for(int i=0;i<n;i++){
++      uint32_t tex = (i==ds && !blink(f)) ? 2 : 1; int y=bar_y(i);
++      mui_prim(fb,100,y,116,y+20,0,0,16,20,tex,0xffffffff);
++      mui_prim(fb,116,y,284,y+20,16,0,32,20,tex,0xffffffff);
++      mui_prim(fb,284,y,300,y+20,32,0,48,20,tex,0xffffffff);
++    }
++    mui_set_frame(fb);
++  }
++  void input(int f,uint32_t b){
++    if(f%2) return;            // o jogo le o controle a cada 2 quadros
++    uint32_t e=b&~prevpoll; prevpoll=b;
++    if(screen==0){
++      if(e&0x10 && sel>0){sel--;moves++;} if(e&0x40 && sel<n-1){sel++;moves++;}
++      if(e&0x4000){ r.confirms.push_back({sel,screen}); screen=1; closing=close_anim; }
++    } else if(e&0x4000) r.confirms.push_back({-1,screen});
++  }
++};
++int Game::close_anim=0;
++static Result run(std::function<Ev(int)> script,int frames=300,std::function<bool(int)> blink=nullptr,bool menus=true){
++  Game g; if(blink) g.blink=blink;
++    uint32_t b=0;
++  for(int f=1;f<frames;f++){
++    g.draw(f);
++    Ev e=script(f);
++    MuiMouse m{}; m.in_client=true; m.inside=e.inside; m.mx=e.mx; m.my=e.my; m.down[MUI_BL]=e.ldown; m.clicked[MUI_BL]=e.lclick;
++    b=mui_mouse(f,m,menus,0);
++    g.input(f,b);
++  }
++  g.r.final_sel=g.sel; g.r.moves=g.moves; return g.r;
++}
++static void show(const char*name,const Result&r,const char*expect){
++  std::string s; for(auto&c:r.confirms){ char t[40]; snprintf(t,sizeof t,"%s%d@tela%d",s.empty()?"":", ",c.first,c.second); s+=t; }
++  printf("%-58s confirmou: [%s]  (esperado: %s)\n",name,s.c_str(),expect);
++}
++int main(int argc,char**argv){ int only=argc>1?atoi(argv[1]):0; int k=0;
++#define SC if(++k==only)
++  // S1: passa o mouse no item 3, espera, clique normal (6 quadros)
++  SC show("S1 hover no 3 e clique normal",run([](int f){Ev e; e.inside=true; e.mx=200; e.my=center_y(3); e.ldown=(f>=80&&f<86); e.lclick=(f==80); return e;}),"3 uma vez");
++  // S2: clique direto no 4 segurando ~250 ms (15 quadros) sem hover antes
++  SC show("S2 clique direto no 4 segurando 250 ms",run([](int f){Ev e; e.inside=f>=40; e.mx=200; e.my=center_y(4); e.ldown=(f>=40&&f<55); e.lclick=(f==40); return e;}),"4 uma vez");
++  // S3: clique segurado 400 ms no item ja selecionado
++  SC show("S3 hover no 2, clique segurado 400 ms",run([](int f){Ev e; e.inside=true; e.mx=200; e.my=center_y(2); e.ldown=(f>=80&&f<104); e.lclick=(f==80); return e;}),"2 uma vez");
++  // S4: clica no 4 e o mouse escorrega para o 1 logo depois
++  SC show("S4 clica no 4, mouse escorrega para o 1",run([](int f){Ev e; e.inside=true; e.mx=200; e.my=center_y(f<44?4:1); e.ldown=(f>=40&&f<44); e.lclick=(f==40); return e;}),"4 uma vez");
++  // S5: clique muito curto (1 quadro, entre leituras do jogo) sem menus (so X)
++  SC show("S5 clique de 1 quadro, mouse nos menus desligado",run([](int f){Ev e; e.ldown=(f==41); e.lclick=(f==41); return e;},300,nullptr,false),"1 X (item 0)");
++  // S6: clique em quadro impar com botao ja solto na leitura (clique so visto pela mensagem)
++  SC show("S6 clique inteiro entre leituras (so a mensagem viu)",run([](int f){Ev e; e.lclick=(f==41); return e;},300,nullptr,false),"1 X (item 0)");
++  // S7: realce pisca (some 2 de cada 8 quadros) e o clique cai num quadro sem realce
++  SC show("S7 realce piscando, clique no 3",run([](int f){Ev e; e.inside=true; e.mx=200; e.my=(f<70?center_y(0):center_y(3)); e.ldown=(f>=70&&f<74); e.lclick=(f==70); return e;},300,[](int f){return (f%8)>=6 || (f>=66&&f<=72);}),"3 uma vez");
++  // S8: mouse varrendo a lista de cima a baixo devagar, mexendo 1 px por quadro dentro das barras (sem clique)
++  SC show("S4b vai ao 4 so no clique e escorrega para o 1",run([](int f){Ev e; e.inside=true; e.mx=200; e.my=center_y(f<40?0:(f<44?4:1)); e.ldown=(f>=40&&f<44); e.lclick=(f==40); return e;}),"4 uma vez");
++  SC { Game::close_anim=10; show("S9 clique segurado 300 ms, menu fecha com animacao",run([](int f){Ev e; e.inside=true; e.mx=200; e.my=center_y(2); e.ldown=(f>=80&&f<98); e.lclick=(f==80); return e;}),"2 uma vez (sem X extra na tela seguinte)"); }
++  SC { Result r=run([](int f){Ev e; e.inside=true; e.mx=200+(f%3); e.my=(f<30?center_y(0):center_y(4)); return e;},200);
++    printf("%-58s selecao final %d, %d passos dados pelo jogo (esperado: 4, 4 passos)\n","S10 pula para o 4 e o mouse treme dentro da barra",r.final_sel,r.moves); }
++  SC { Result r=run([](int f){Ev e; e.inside=true; e.mx=150+(f%40); e.my=50+f/2; if(e.my>190)e.my=190; return e;},400);
++    printf("%-58s selecao final %d, %d passos dados pelo jogo (esperado: 4, 4 passos)\n","S8 varredura lenta com micro-movimentos",r.final_sel,r.moves); }
++  return 0;
++}
+diff -ruN -x '*.o' orig/tools/teste_mouse/reproduzir_gravacao.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/reproduzir_gravacao.cpp
+--- a/tools/teste_mouse/reproduzir_gravacao.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/reproduzir_gravacao.cpp	2026-10-18 23:04:36.740786454 +0000
+@@ -0,0 +1,30 @@
++// Passa uma gravacao F4 de verdade pelo modulo e imprime o que ele detecta (cartas, cursor) a cada mudanca.
++#include "mouse_ui.cpp"
++#include <fstream>
++#include <sstream>
++struct L { char t; int a[4]; float uv[4]; uint32_t tex, col; };
++int main(int argc,char**argv){
++  std::ifstream in(argv[1]); std::string line;
++  std::vector<std::pair<uint64_t,std::vector<L>>> frames; std::vector<L> last;
++  while(std::getline(in,line)){
++    if(line.empty()||line[0]=='#') continue;
++    std::istringstream ss(line); char t; ss>>t;
++    if(t=='F'){ uint64_t fr; std::string a; ss>>fr>>a; if(a=="same") frames.push_back({fr,last}); else frames.push_back({fr,{}}); continue; }
++    if(frames.empty()) continue;
++    L l{}; l.t=t; std::string tx,cl;
++    if(t=='S'){ ss>>l.a[0]>>l.a[1]>>l.a[2]>>l.a[3]>>l.uv[0]>>l.uv[1]>>l.uv[2]>>l.uv[3]>>tx>>cl; l.tex=strtoul(tx.c_str(),0,16); l.col=strtoul(cl.c_str(),0,16); }
++    else if(t=='R'){ ss>>l.a[0]>>l.a[1]>>l.a[2]>>l.a[3]; }
++    else if(t=='Q'){ ss>>l.a[0]>>l.a[1]>>l.a[2]>>l.a[3]>>tx; l.tex=strtoul(tx.c_str(),0,16); }
++    else continue;
++    frames.back().second.push_back(l); last=frames.back().second;
++  }
++  std::string prev; int n=0, ni=0, ns=0;
++  for(auto &f:frames){
++    for(auto &l:f.second){ if(l.t=='S') mui_prim(0,l.a[0],l.a[1],l.a[2],l.a[3],l.uv[0],l.uv[1],l.uv[2],l.uv[3],l.tex,l.col); else if(l.t=='R') mui_run(0,l.a[0],l.a[1],l.a[2],l.a[3]); else mui_quad(0,l.a[0],l.a[1],l.a[2],l.a[3],l.tex); }
++    mui_set_frame(0); n++; if(!g_items.empty()) ni++; if(g_isel>=0) ns++;
++    char b[200]; snprintf(b,sizeof b,"modo=%d cartas=%zu cursor=%d",g_imode,g_items.size(),g_isel); std::string k=b;
++    if(g_isel>=0){ snprintf(b,sizeof b," col=%d linha=%d x=%d",g_items[g_isel].col,g_items[g_isel].row,g_items[g_isel].x0); k+=b; }
++    if(argc>2){ printf("%llu %d %d %d %d\n",(unsigned long long)f.first,g_imode,(int)g_items.size(),g_isel>=0?g_items[g_isel].x0:-1,g_isel>=0?g_items[g_isel].y0:-1); } else if(k!=prev){ printf("%llu %s\n",(unsigned long long)f.first,k.c_str()); prev=k; }
++  }
++  printf("# %d quadros, %d com cartas, %d com cursor\n",n,ni,ns);
++}
+diff -ruN -x '*.o' orig/tools/teste_mouse/rodar.sh src/tagforcerecomp-preview-master/tools/teste_mouse/rodar.sh
+--- a/tools/teste_mouse/rodar.sh	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/rodar.sh	2026-10-18 23:04:36.752317029 +0000
+@@ -0,0 +1,32 @@
++#!/bin/sh
++# Testa runtime/mouse_ui.cpp sem o jogo: um menu simulado (le o controle a cada 2 quadros, realce com atraso) recebe o mouse.
++# Uso (Git Bash/MSYS2 ou Linux): sh tools/teste_mouse/rodar.sh [quantidade de casos aleatorios, padrao 500]
++# Gravacao de verdade (F4 no jogo): g++ -std=c++17 -Iruntime tools/teste_mouse/reproduzir_gravacao.cpp -o /tmp/rep && /tmp/rep gen/logs/<sessao>_mouse.txt
++set -e
++cd "$(dirname "$0")"
++R=../../runtime; N=${1:-500}; T=${TMPDIR:-/tmp}/teste_mouse; mkdir -p "$T"
++g++ -std=c++17 -O1 -I$R cenarios.cpp $R/mouse_ui.cpp -o "$T/cenarios"
++g++ -std=c++17 -O1 -I$R aleatorio.cpp $R/mouse_ui.cpp -o "$T/aleatorio"
++g++ -std=c++17 -O1 -I$R apagados.cpp $R/mouse_ui.cpp -o "$T/apagados"
++g++ -std=c++17 -O1 -I$R cartas.cpp $R/mouse_ui.cpp -o "$T/cartas"
++g++ -std=c++17 -O1 -I$R campo.cpp $R/mouse_ui.cpp -o "$T/campo"
++echo "== cenarios =="; for i in 1 2 3 4 5 6 7 8 9 10 11; do "$T/cenarios" $i; done
++echo "== $N casos aleatorios (um processo por caso: o modulo guarda estado) =="
++: > "$T/r.txt"; s=1; while [ $s -le $N ]; do "$T/aleatorio" $s >> "$T/r.txt"; s=$((s+1)); done
++ok3=$(grep -v 'n=2 ' "$T/r.txt" | grep -c '^1 ' || true); tot3=$(grep -vc 'n=2 ' "$T/r.txt" || true)
++ok2=$(grep 'n=2 ' "$T/r.txt" | grep -c '^1 ' || true); tot2=$(grep -c 'n=2 ' "$T/r.txt" || true)
++echo "listas de 3+ itens: $ok3/$tot3 corretos (deve ser 100%)"
++echo "listas de 2 itens:  $ok2/$tot2 (sem uma lista maior antes, o modulo nao tem como reconhecer o realce)"
++echo "== $N menus com itens apagados (o jogo os pula), clicando e so passando o mouse =="
++: > "$T/a.txt"; s=1; while [ $s -le $N ]; do "$T/apagados" $s 0 >> "$T/a.txt"; "$T/apagados" $s 1 >> "$T/a.txt"; s=$((s+1)); done
++oka=$(grep -c '^1 ' "$T/a.txt" || true); tota=$(wc -l < "$T/a.txt")
++echo "menus com itens apagados: $oka/$tota corretos (deve ser 100%)"
++echo "== $N cliques em cartas: Deck Edit, mao do duelo, mao com janelinha aberta =="
++: > "$T/c.txt"; s=1; while [ $s -le $N ]; do "$T/cartas" $s 0 >> "$T/c.txt"; "$T/cartas" $s 1 >> "$T/c.txt"; "$T/cartas" $s 2 >> "$T/c.txt"; s=$((s+1)); done
++okc=$(grep -c '^1 ' "$T/c.txt" || true); totc=$(wc -l < "$T/c.txt")
++echo "cartas: $okc/$totc corretos (deve ser 100%)"
++echo "== $N cliques no campo do duelo (monstros e magicas/armadilhas seus, monstros do oponente, mao) =="
++: > "$T/f.txt"; s=1; while [ $s -le $N ]; do "$T/campo" $s >> "$T/f.txt"; s=$((s+1)); done
++okf=$(grep -c '^1 ' "$T/f.txt" || true); totf=$(wc -l < "$T/f.txt")
++echo "campo: $okf/$totf corretos (deve ser 100%)"
++[ "$ok3" = "$tot3" ] && [ "$oka" = "$tota" ] && [ "$okc" = "$totc" ] && [ "$okf" = "$totf" ]
