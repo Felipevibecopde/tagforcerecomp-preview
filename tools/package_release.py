@@ -56,8 +56,12 @@ def main():
     pkg = os.path.join(out, 'TagForceRecomp')
     cache = os.path.join(out, 'cache')
     env = dict(os.environ, PATH=MSYS + os.pathsep + os.environ['PATH'])
+    keep_exe = None
+    if '--no-build' in args and os.path.isfile(os.path.join(pkg, 'TagForceRecomp.exe')):   # --no-build reuses the exe: keep it across the clean-up
+        keep_exe = open(os.path.join(pkg, 'TagForceRecomp.exe'), 'rb').read()
     if os.path.isdir(pkg): shutil.rmtree(pkg)
     os.makedirs(pkg)
+    if keep_exe: open(os.path.join(pkg, 'TagForceRecomp.exe'), 'wb').write(keep_exe)
     os.chdir(ROOT)
 
     # 1. the generic runtime
@@ -78,7 +82,7 @@ def main():
 
     # 2. slim LGPL-only FFmpeg (tools/build_ffmpeg_lite.sh builds it once into gen/ffmpeg_lite)
     if not glob.glob('gen/ffmpeg_lite/avcodec-*.dll'):
-        run([os.path.join(os.path.dirname(MSYS), 'usr', 'bin', 'bash.exe'), '-lc', 'sh tools/build_ffmpeg_lite.sh'], env=dict(env, MSYSTEM='UCRT64', CHERE_INVOKING='1'))
+        run([os.path.join(os.path.dirname(os.path.dirname(MSYS)), 'usr', 'bin', 'bash.exe'), '-lc', 'sh tools/build_ffmpeg_lite.sh'], env=dict(env, MSYSTEM='UCRT64', CHERE_INVOKING='1'))
     for f in glob.glob('gen/ffmpeg_lite/*'): shutil.copy(f, pkg)
 
     # 3. behavior mods

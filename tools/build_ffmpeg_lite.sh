@@ -22,7 +22,7 @@ mkdir -p $W/bld && cd $W/bld
     --disable-swresample --disable-network --disable-debug --enable-small --enable-decoder=atrac3,atrac3p,h264 --prefix=$W/out
 make -j8
 make install
-cd $ROOT
+cd "$ROOT"
 cp $W/out/bin/avcodec-*.dll $W/out/bin/avutil-*.dll gen/ffmpeg_lite/
 cp /ucrt64/bin/libwinpthread-1.dll gen/ffmpeg_lite/
 cp $W/ffmpeg-$VER/COPYING.LGPLv2.1 gen/ffmpeg_lite/FFMPEG-LGPL.txt

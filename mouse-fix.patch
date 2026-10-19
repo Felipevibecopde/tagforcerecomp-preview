@@ -1,7 +1,7 @@
 diff -ruN -x '*.o' orig/CHANGELOG.md src/tagforcerecomp-preview-master/CHANGELOG.md
 --- a/CHANGELOG.md	2026-10-18 21:05:35.917574003 +0000
-+++ b/CHANGELOG.md	2026-10-18 23:04:36.752917824 +0000
-@@ -2,6 +2,38 @@
++++ b/CHANGELOG.md	2026-10-19 10:42:06.481547149 +0000
+@@ -2,6 +2,41 @@
  
  Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
  
@@ -26,6 +26,9 @@ diff -ruN -x '*.o' orig/CHANGELOG.md src/tagforcerecomp-preview-master/CHANGELOG
 +- Mouse buttons follow the Windows "switch primary and secondary buttons" setting.
 +- Clean builds (ISO only, no decompiler data) crashed when the title menu loaded: the decomp swaps call `sprintf`/`strlen` by import
 +  name, and those names only exist in the maintainers' NID table. They are now done on the host when the import has no name.
++
++- Release packaging: `tools/package_release.py` looked for bash.exe in the wrong MSYS2 folder, and `--no-build` deleted the exe it was
++  told to reuse; `tools/build_ffmpeg_lite.sh` stopped before copying the DLLs when the project path had a space.
 +
 +### Added
 +- Mouse in menus now also works on **cards**: in Deck Edit (the grid of card thumbnails) and in a **duel** (your hand, your monsters
@@ -723,6 +726,44 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.h src/tagforcerecomp-preview-master/run
 +bool mui_dump_toggle(void);    /* devolve o estado novo */
 +bool mui_dump_on(void);
 +void mui_dump_buttons(uint64_t frame, uint32_t buttons);   /* uma vez por quadro: botoes do PSP que foram para o jogo */
+Binary files orig/tools/__pycache__/package_release.cpython-312.pyc and src/tagforcerecomp-preview-master/tools/__pycache__/package_release.cpython-312.pyc differ
+diff -ruN -x '*.o' orig/tools/build_ffmpeg_lite.sh src/tagforcerecomp-preview-master/tools/build_ffmpeg_lite.sh
+--- a/tools/build_ffmpeg_lite.sh	2026-10-18 21:05:35.921546390 +0000
++++ b/tools/build_ffmpeg_lite.sh	2026-10-19 10:26:24.887427195 +0000
+@@ -22,7 +22,7 @@
+     --disable-swresample --disable-network --disable-debug --enable-small --enable-decoder=atrac3,atrac3p,h264 --prefix=$W/out
+ make -j8
+ make install
+-cd $ROOT
++cd "$ROOT"
+ cp $W/out/bin/avcodec-*.dll $W/out/bin/avutil-*.dll gen/ffmpeg_lite/
+ cp /ucrt64/bin/libwinpthread-1.dll gen/ffmpeg_lite/
+ cp $W/ffmpeg-$VER/COPYING.LGPLv2.1 gen/ffmpeg_lite/FFMPEG-LGPL.txt
+diff -ruN -x '*.o' orig/tools/package_release.py src/tagforcerecomp-preview-master/tools/package_release.py
+--- a/tools/package_release.py	2026-10-18 21:05:35.922505404 +0000
++++ b/tools/package_release.py	2026-10-19 10:26:24.952777751 +0000
+@@ -56,8 +56,12 @@
+     pkg = os.path.join(out, 'TagForceRecomp')
+     cache = os.path.join(out, 'cache')
+     env = dict(os.environ, PATH=MSYS + os.pathsep + os.environ['PATH'])
++    keep_exe = None
++    if '--no-build' in args and os.path.isfile(os.path.join(pkg, 'TagForceRecomp.exe')):   # --no-build reuses the exe: keep it across the clean-up
++        keep_exe = open(os.path.join(pkg, 'TagForceRecomp.exe'), 'rb').read()
+     if os.path.isdir(pkg): shutil.rmtree(pkg)
+     os.makedirs(pkg)
++    if keep_exe: open(os.path.join(pkg, 'TagForceRecomp.exe'), 'wb').write(keep_exe)
+     os.chdir(ROOT)
+ 
+     # 1. the generic runtime
+@@ -78,7 +82,7 @@
+ 
+     # 2. slim LGPL-only FFmpeg (tools/build_ffmpeg_lite.sh builds it once into gen/ffmpeg_lite)
+     if not glob.glob('gen/ffmpeg_lite/avcodec-*.dll'):
+-        run([os.path.join(os.path.dirname(MSYS), 'usr', 'bin', 'bash.exe'), '-lc', 'sh tools/build_ffmpeg_lite.sh'], env=dict(env, MSYSTEM='UCRT64', CHERE_INVOKING='1'))
++        run([os.path.join(os.path.dirname(os.path.dirname(MSYS)), 'usr', 'bin', 'bash.exe'), '-lc', 'sh tools/build_ffmpeg_lite.sh'], env=dict(env, MSYSTEM='UCRT64', CHERE_INVOKING='1'))
+     for f in glob.glob('gen/ffmpeg_lite/*'): shutil.copy(f, pkg)
+ 
+     # 3. behavior mods
 diff -ruN -x '*.o' orig/tools/teste_mouse/aleatorio.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/aleatorio.cpp
 --- a/tools/teste_mouse/aleatorio.cpp	1970-01-01 00:00:00.000000000 +0000
 +++ b/tools/teste_mouse/aleatorio.cpp	2026-10-18 21:11:39.472597425 +0000

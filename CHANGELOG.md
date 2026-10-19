@@ -24,6 +24,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - Clean builds (ISO only, no decompiler data) crashed when the title menu loaded: the decomp swaps call `sprintf`/`strlen` by import
   name, and those names only exist in the maintainers' NID table. They are now done on the host when the import has no name.
 
+- Release packaging: `tools/package_release.py` looked for bash.exe in the wrong MSYS2 folder, and `--no-build` deleted the exe it was
+  told to reuse; `tools/build_ffmpeg_lite.sh` stopped before copying the DLLs when the project path had a space.
+
 ### Added
 - Mouse in menus now also works on **cards**: in Deck Edit (the grid of card thumbnails) and in a **duel** (your hand, your monsters
   and Spell/Trap cards, the opponent's monsters, e.g. as attack targets), clicking a card moves the game's cursor there and selects it. Measured from F4 recordings: thumbnails 22x30 in a 28x34 grid with a 9-piece frame
