@@ -374,7 +374,7 @@ static void show_controls(HWND h) {
         L"   F = \x25A1   R or middle click = \x25B3\n"
         L"   Q / Tab = L / R (or the mouse side buttons)\n"
         L"   Mouse wheel = up / down\n"
-        L"   View > Mouse in menus (experimental, off): hovering highlights the item, clicking confirms; in Deck Edit and in a duel (hand and field), clicking a card moves the cursor there and selects it\n"
+        L"   View > Mouse in menus (experimental, off): hovering highlights the item, clicking confirms; in Deck Edit and in a duel (hand and field), clicking a card moves the cursor there and selects it; in a duel, hovering a card moves the cursor to it\n"
         L"   Shift = run (holds \x25CB)   Enter = START   Ctrl = SELECT\n\n"
         L"Classic keyboard (with the option off)\n"
         L"   Arrows, Z = \x2715   X = \x25CB   A = \x25A1   S = \x25B3, Q / W = L / R\n\n"

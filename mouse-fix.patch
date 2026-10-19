@@ -1,7 +1,7 @@
 diff -ruN -x '*.o' orig/CHANGELOG.md src/tagforcerecomp-preview-master/CHANGELOG.md
 --- a/CHANGELOG.md	2026-10-18 21:05:35.917574003 +0000
-+++ b/CHANGELOG.md	2026-10-19 10:42:06.481547149 +0000
-@@ -2,6 +2,41 @@
++++ b/CHANGELOG.md	2026-10-19 12:33:04.494691990 +0000
+@@ -2,6 +2,61 @@
  
  Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
  
@@ -20,6 +20,18 @@ diff -ruN -x '*.o' orig/CHANGELOG.md src/tagforcerecomp-preview-master/CHANGELOG
 +- Mouse in menus: greyed-out items (e.g. Free Duel / Network Mode in the main menu early in the game) are skipped by the game's d-pad;
 +  the module counted them as steps, overshot the target and the highlight kept jumping up and down. Greyed-out bars are now recognised
 +  (by their style, and by learning which styles have ever been selected), not counted and not targeted; a click on one does nothing.
++- Duel: the small options window that opens over the cards (Activate / Attack / ...) is now recognised as a menu (its text lines
++  overlap: step 15 for 17 px of text, so it was missed). Clicking an option used to be taken as a click on the Spell/Trap zone
++  under the window, and the module pressed the d-pad, moving the window's selection. Now hovering highlights the option and
++  clicking confirms that option. Tight lines only count as a menu when a highlight bar marks exactly one of them.
++- Duel: your **deck** (the pointer starts on it at the beginning of your turn, x=448 y=175) and the opponent's pile (x=208 y=61) are
++  known places: the mouse was stuck at the start of every turn until a key moved the cursor off the deck.
++- Duel: the 2-option **Attack** box (over the opponent's monster row) is recognised as a menu too (2 lines count when a highlight marks
++  one of them); clicking "Attack" used to be taken as a click on the opponent's zone under it. A text menu whose highlight blinks
++  (confirming) stays a menu for up to 12 frames while its lines are still on screen.
++- Duel **phase selection** (Draw ... End): recognised as a horizontal menu (six 20x32 icons, step 40, with a 9-piece highlight
++  frame). Hovering highlights a phase and clicking selects it; unavailable phases (drawn from another part of the texture) are
++  skipped like the game does and are not targets.
 +- Very short clicks (shorter than the game's 2-frame input poll) are no longer lost: the window records every button-down and each
 +  click stays pressed for at least 3 frames.
 +- The click that only brings the window to the front is no longer sent to the game.
@@ -34,10 +46,18 @@ diff -ruN -x '*.o' orig/CHANGELOG.md src/tagforcerecomp-preview-master/CHANGELOG
 +- Mouse in menus now also works on **cards**: in Deck Edit (the grid of card thumbnails) and in a **duel** (your hand, your monsters
 +  and Spell/Trap cards, the opponent's monsters, e.g. as attack targets), clicking a card moves the game's cursor there and selects it. Measured from F4 recordings: thumbnails 22x30 in a 28x34 grid with a 9-piece frame
 +  cursor; hand and field cards are 3D quads drawn twice (shared frame texture + art) with a 32x32 pointer on the chosen one; on the field the
-+  cursor changes row one step at a time (rows have gaps). Only clicks act there (hovering does not move the cursor,
-+  because small windows on those screens also use the d-pad); if the cursor does not move (a window is open) nothing is confirmed.
-+- **F4**: records what the game draws on each frame (2D sprites, text lines, 3D card quads) plus the buttons and the mouse, to
-+  `logs/<session>_mouse.txt`, to develop mouse support for screens that are not lists (Deck Edit, duel).
++  cursor changes row one step at a time (rows have gaps). In Deck Edit only clicks act (hovering does not move the cursor); if the cursor does not move (a window is open) nothing is confirmed.
++- In a duel, **hovering** a card moves the game's cursor to it (like the d-pad), with the game's sounds. Hovering pauses itself while a
++  small window may be open (after confirming with X, or when the cursor does not move) and comes back when the pointer moves or
++  reappears, or with O.
++- Duel field: your **empty** Monster and Spell/Trap zones are targets too (hover or click), so the cursor follows the mouse over the
++  whole field, not only over cards. Pointer positions measured from F4 recordings (monster zones y=145, x 226-401 step ~44;
++  Spell/Trap zones y=181, x 218-409 step ~47, both centred on x=314). The F4 recording is flushed to disk every second.
++- Duel field: the opponent's Monster zones (y=99, x 236-391 step ~39) and Spell/Trap zones (y=75, x 242-385 step ~36) are targets
++  too, empty or not. On the field the cursor moves one step at a time and checks it got closer: when choosing an attack target the
++  game skips empty zones, so a zone it cannot reach is marked and skipped (without pausing the rest) until the cursor moves.
++- **F4**: records what the game draws on each frame (2D sprites, text lines, 3D card quads) plus the buttons, every mouse movement
++  (M) and what the mouse module understood (U), to `logs/<session>_mouse.txt`, to develop mouse support for screens that are not lists (Deck Edit, duel).
 +- `tools/teste_mouse/`: offline simulator and randomized test for the mouse module (no game or Windows needed).
 +
  ## [0.3.0] - 2026-10-18
@@ -98,7 +118,7 @@ diff -ruN -x '*.o' orig/decomp/decomp.cpp src/tagforcerecomp-preview-master/deco
  }
 diff -ruN -x '*.o' orig/runtime/display.cpp src/tagforcerecomp-preview-master/runtime/display.cpp
 --- a/runtime/display.cpp	2026-10-18 21:05:35.920209078 +0000
-+++ b/runtime/display.cpp	2026-10-18 22:08:49.660342657 +0000
++++ b/runtime/display.cpp	2026-10-19 11:00:32.715944371 +0000
 @@ -160,6 +160,10 @@
  }
  static void quit_process(void);
@@ -197,7 +217,7 @@ diff -ruN -x '*.o' orig/runtime/display.cpp src/tagforcerecomp-preview-master/ru
 +        else InterlockedExchange(&g_mouse_activating, 0);
      }
 +    /* mouse nos menus (mouse_ui.cpp) + botoes do mouse (esquerdo = X, direito = O, meio = triangulo, laterais = L/R) */
-+    b |= mui_mouse(g_frames, m, display_mouse_menus(), b & 0xf0);
++    b |= mui_mouse(g_frames, m, display_mouse_menus(), b);   /* b = teclado ate aqui: direcional cancela o mouse; X/O pausam/liberam o passar o mouse no duelo */
      return b | wheel_bits();
  }
  static uint32_t read_keys(void) {
@@ -244,19 +264,19 @@ diff -ruN -x '*.o' orig/runtime/hle_ge.cpp src/tagforcerecomp-preview-master/run
          }
 diff -ruN -x '*.o' orig/runtime/menu.cpp src/tagforcerecomp-preview-master/runtime/menu.cpp
 --- a/runtime/menu.cpp	2026-10-18 21:05:35.920854414 +0000
-+++ b/runtime/menu.cpp	2026-10-18 23:04:36.753509415 +0000
++++ b/runtime/menu.cpp	2026-10-19 11:01:54.281525774 +0000
 @@ -374,7 +374,7 @@
          L"   F = \x25A1   R or middle click = \x25B3\n"
          L"   Q / Tab = L / R (or the mouse side buttons)\n"
          L"   Mouse wheel = up / down\n"
 -        L"   View > Mouse in menus (experimental, off): hovering highlights the item, clicking confirms\n"
-+        L"   View > Mouse in menus (experimental, off): hovering highlights the item, clicking confirms; in Deck Edit and in a duel (hand and field), clicking a card moves the cursor there and selects it\n"
++        L"   View > Mouse in menus (experimental, off): hovering highlights the item, clicking confirms; in Deck Edit and in a duel (hand and field), clicking a card moves the cursor there and selects it; in a duel, hovering a card moves the cursor to it\n"
          L"   Shift = run (holds \x25CB)   Enter = START   Ctrl = SELECT\n\n"
          L"Classic keyboard (with the option off)\n"
          L"   Arrows, Z = \x2715   X = \x25CB   A = \x25A1   S = \x25B3, Q / W = L / R\n\n"
 diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/runtime/mouse_ui.cpp
 --- a/runtime/mouse_ui.cpp	2026-10-18 21:05:35.920962004 +0000
-+++ b/runtime/mouse_ui.cpp	2026-10-18 23:03:37.308816281 +0000
++++ b/runtime/mouse_ui.cpp	2026-10-19 12:32:47.399058203 +0000
 @@ -22,6 +22,7 @@
  std::set<uint64_t> g_known;                   /* assinaturas ja vistas como 'selecionada' em listas com 3 ou mais barras (valem tambem para listas de 2) */
  std::set<uint64_t> g_normal;                  /* assinaturas ja vistas em 2 ou mais barras de uma mesma lista (estilo 'nao selecionada') */
@@ -274,7 +294,32 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
      if (last != buf) { last = buf; fprintf(stderr, "[mouse] lista: %s\n", buf); }
  }
  
-@@ -90,8 +91,33 @@
+@@ -50,13 +51,17 @@
+         for (size_t j = i + 1; j < r.size(); j++) {
+             if (std::abs(r[j].x0 - r[i].x0) > 2) continue;
+             const int d = r[j].y0 - ch.back().y0;
+-            if (!pitch) { if (d >= r[i].y1 - r[i].y0 && d <= 60) { pitch = d; ch.push_back(r[j]); } }
++            /* linhas que se sobrepoem um pouco (passo menor que a altura do texto, ex. a janelinha de opcoes do duelo: passo 15, texto 17)
++             * tambem valem, mas so se um realce marcar exatamente uma delas (verificado no fim) */
++            if (!pitch) { if (d >= std::min(r[i].y1 - r[i].y0, 12) && d <= 60) { pitch = d; ch.push_back(r[j]); } }
+             else if (std::abs(d - pitch) <= 1) ch.push_back(r[j]);
+         }
+         if (ch.size() > best.size()) best = ch;
+     }
+-    if (best.size() < 3) return;
++    if (best.size() < 2) return;
+     const int pitch = best[1].y0 - best[0].y0;
++    /* linhas apertadas, ou so 2 linhas (a caixa 'Attack' do duelo tem 2 opcoes): so valem se um realce marcar exatamente uma (verificado no fim) */
++    const bool tight = pitch < best[0].y1 - best[0].y0 || best.size() < 3;
+     int left = best[0].x0, right = best[0].x1;
+     for (const Run &b : best) { left = std::min(left, b.x0); right = std::max(right, b.x1); }
+     /* realces: componentes de sprites de mesma textura e cor que se tocam */
+@@ -86,12 +91,98 @@
+         if (ov * 10 >= (h.second - h.first) * 6) { g_sel = (int)i; n++; break; }
+     }
+     if (n != 1) g_sel = -1;
++    if (tight && g_sel < 0) { g_list.clear(); g_sel = -1; return; }   /* sem realce: texto corrido (descricao da carta, 2 linhas soltas), nao e menu */
+     (void)hx0;
  }
  
  /* barras = sequencias contiguas na horizontal de sprites de mesma altura (ponta, meio, ponta) com um meio largo */
@@ -303,22 +348,97 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 +    for (size_t i = 0; i < g_list.size(); i++) if ((int)i != g_sel && g_list[i].sig != major) g_skip[i] = true;
 +}
 +
++/* Fileira de icones iguais com uma moldura de realce em volta de um deles: a escolha de fase do duelo (Draw, Standby, Main 1, Battle,
++ * Main 2, End). Medido (F4): icones de 20x32 de uma textura so, lado a lado com passo 40, em y=124; o realce e uma moldura de 9 pedacos
++ * (outra textura) com ~4-5 px de folga. Fase indisponivel = mesmo icone desenhado com outra parte da textura (v diferente da escolhida);
++ * o jogo pula essas no direcional. Vira uma lista horizontal comum (passar o mouse realca, clicar confirma). */
++bool analyze_icons() {
++    std::map<std::tuple<uint32_t, int, int, int>, std::vector<int>> rows;   /* (textura, y0, w, h) -> sprites */
++    for (size_t i = 0; i < g_snap.size(); i++) {
++        const Spr &a = g_snap[i]; const int w = a.x1 - a.x0, h = a.y1 - a.y0;
++        if (w < 12 || w > 48 || h < 16 || h > 56) continue;
++        rows[std::make_tuple(a.tex, a.y0, w, h)].push_back((int)i);
++    }
++    for (auto &kv : rows) {
++        std::vector<int> v = kv.second;
++        if (v.size() < 4 || v.size() > 10) continue;
++        std::sort(v.begin(), v.end(), [](int a, int b) { return g_snap[a].x0 < g_snap[b].x0; });
++        const int pitch = g_snap[v[1]].x0 - g_snap[v[0]].x0;
++        if (pitch < 24 || pitch > 64) continue;
++        bool even = true; for (size_t k = 1; k < v.size(); k++) if (std::abs(g_snap[v[k]].x0 - g_snap[v[k - 1]].x0 - pitch) > 2) even = false;
++        if (!even) continue;
++        /* realce: componente (mesma textura e cor, se tocando, >= 4 pedacos, outra textura) que envolve exatamente um icone */
++        const uint32_t itex = std::get<0>(kv.first);
++        std::vector<int> comp(g_snap.size()); for (size_t i = 0; i < comp.size(); i++) comp[i] = (int)i;
++        auto find = [&](int x) { while (comp[x] != x) x = comp[x] = comp[comp[x]]; return x; };
++        for (size_t i = 0; i < g_snap.size(); i++) for (size_t j = i + 1; j < g_snap.size(); j++) {
++            const Spr &a = g_snap[i], &b = g_snap[j];
++            if (a.tex == b.tex && a.tex != itex && a.col == b.col && a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1) comp[find((int)i)] = find((int)j);
++        }
++        std::map<int, std::tuple<int, int, int, int, int>> bb;
++        for (size_t i = 0; i < g_snap.size(); i++) {
++            const Spr &a = g_snap[i]; if (a.tex == itex) continue;
++            auto f = bb.find(find((int)i));
++            if (f == bb.end()) bb[find((int)i)] = std::make_tuple(a.x0, a.y0, a.x1, a.y1, 1);
++            else { auto &t = f->second; std::get<0>(t) = std::min(std::get<0>(t), a.x0); std::get<1>(t) = std::min(std::get<1>(t), a.y0); std::get<2>(t) = std::max(std::get<2>(t), a.x1); std::get<3>(t) = std::max(std::get<3>(t), a.y1); std::get<4>(t)++; }
++        }
++        int sel = -1, found = 0;
++        for (auto &b : bb) {
++            if (std::get<4>(b.second) < 4) continue;
++            int in = -1, n = 0;
++            for (size_t k = 0; k < v.size(); k++) {
++                const Spr &a = g_snap[v[k]];
++                const int l = a.x0 - std::get<0>(b.second), t = a.y0 - std::get<1>(b.second), r = std::get<2>(b.second) - a.x1, bo = std::get<3>(b.second) - a.y1;
++                if (l >= 2 && l <= 10 && t >= 2 && t <= 10 && r >= 2 && r <= 10 && bo >= 2 && bo <= 10) { in = (int)k; n++; }
++            }
++            if (n == 1) { sel = in; found++; }
++        }
++        if (found != 1) continue;
++        const int half = std::max(2, (pitch - (g_snap[v[0]].x1 - g_snap[v[0]].x0)) / 2);
++        g_list.clear(); g_skip.clear();
++        for (size_t k = 0; k < v.size(); k++) {
++            const Spr &a = g_snap[v[k]];
++            Bar b{}; b.x0 = a.x0 - half; b.x1 = a.x1 + half; b.y0 = a.y0 - 6; b.y1 = a.y1 + 6; b.sig = 0;
++            g_list.push_back(b);
++            g_skip.push_back((int)k != sel && (std::abs(a.v0 - g_snap[v[sel]].v0) > 1 || std::abs(a.v1 - g_snap[v[sel]].v1) > 1));
++        }
++        g_sel = sel;
++        return true;
++    }
++    return false;
++}
++
  void analyze() {
 -    g_list.clear(); g_sel = -1;
 +    g_list.clear(); g_sel = -1; g_skip.clear();
      std::vector<Spr> u;   /* sem repeticoes de retangulo, para achar as cadeias */
      for (const Spr &s : g_snap) {
          const int h = s.y1 - s.y0, w = s.x1 - s.x0;
-@@ -122,7 +148,7 @@
+@@ -122,7 +213,22 @@
      for (size_t i = 0; i < bars.size(); i++) grp[std::make_tuple(bars[i].x1 - bars[i].x0, bars[i].y1 - bars[i].y0, bars[i].x0)].push_back((int)i);
      const std::vector<int> *best = nullptr; size_t best_last = 0;
      for (auto &g : grp) { size_t l = 0; for (int i : g.second) l = std::max(l, bars[i].last); if (g.second.size() >= 2 && (!best || l > best_last)) { best = &g.second; best_last = l; } }
 -    if (!best) { analyze_text(); trace_list(); return; }
-+    if (!best) { analyze_text(); g_skip.assign(g_list.size(), false); trace_list(); return; }
++    if (!best) {
++        if (analyze_icons()) { trace_list(); return; }
++        analyze_text(); g_skip.assign(g_list.size(), false);
++        /* janelinha de texto cujo realce pisca (ex.: confirmando 'Attack'): enquanto as mesmas linhas de texto continuarem no lugar, por ate
++         * 12 quadros, a lista continua valendo com a selecao desconhecida (um clique espera o realce voltar), em vez de o campo embaixo dela
++         * virar alvo do clique */
++        static std::vector<Bar> held; static int held_age;
++        if (!g_list.empty()) { held = g_list; held_age = 0; }
++        else if (!held.empty() && ++held_age <= 12) {
++            int lines = 0;
++            for (const Bar &b : held) for (const Run &r : g_runs) if (std::abs(r.x0 - (b.x0 + 6)) <= 4 && r.y0 >= b.y0 - 3 && r.y0 <= b.y1) { lines++; break; }
++            if (lines == (int)held.size()) { g_list = held; g_sel = -1; g_skip.assign(g_list.size(), false); }
++            else held.clear();
++        } else held.clear();
++        trace_list(); return;
++    }
      for (int i : *best) g_list.push_back(bars[i]);
      std::sort(g_list.begin(), g_list.end(), [](const Bar &a, const Bar &b) { return a.y0 < b.y0; });
      /* selecionada: (1) lista de 3+ com so duas assinaturas e uma barra isolada = ela (e as outras sao o estilo 'normal'); (2) uma assinatura ja vista como
-@@ -141,6 +167,7 @@
+@@ -141,6 +247,7 @@
              if (n != 1) g_sel = -1; else g_known.insert(g_list[g_sel].sig);
          }
      }
@@ -326,7 +446,7 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
      trace_list();
  }
  
-@@ -148,9 +175,23 @@
+@@ -148,9 +255,23 @@
  int g_tkx = -1, g_tky = -1;          /* barra alvo (canto superior esquerdo), -1 = nenhuma */
  bool g_pending;                       /* clique esperando a selecao chegar na barra */
  uint64_t g_pending_until, g_next_tap, g_pulse_end; uint32_t g_pulse; int g_taps;
@@ -350,7 +470,7 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
  }
  
  void mui_prim(uint32_t fb, int x0, int y0, int x1, int y1, float u0, float v0, float u1, float v1, uint32_t tex, uint32_t col) {
-@@ -167,11 +208,68 @@
+@@ -167,11 +288,70 @@
      if (v.size() < 400) v.push_back({x0, y0, x1, y1});
  }
  
@@ -374,6 +494,7 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 +    for (const Spr &a : g_snap) { n = fprintf(g_dump, "S %d %d %d %d %.1f %.1f %.1f %.1f %x %x\n", a.x0, a.y0, a.x1, a.y1, a.u0, a.v0, a.u1, a.v1, a.tex, a.col); g_dump_bytes += n > 0 ? n : 0; }
 +    for (const Run &a : g_runs) { n = fprintf(g_dump, "R %d %d %d %d\n", a.x0, a.y0, a.x1, a.y1); g_dump_bytes += n > 0 ? n : 0; }
 +    for (const Quad &a : g_quads) { n = fprintf(g_dump, "Q %d %d %d %d %x\n", a.x0, a.y0, a.x1, a.y1, a.tex); g_dump_bytes += n > 0 ? n : 0; }
++    { static uint64_t last_flush; if (g_dump_frame - last_flush >= 60) { last_flush = g_dump_frame; fflush(g_dump); } }   /* grava no disco ~1x/s: nada se perde se o jogo fechar sem o 2o F4 */
 +    if (g_dump_bytes > kDumpMax) { fprintf(g_dump, "# limite de tamanho: gravacao parada\n"); fclose(g_dump); g_dump = nullptr; g_dump_on = false; }
 +}
 +}
@@ -390,7 +511,8 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 +#endif
 +        if (!g_dump) return false;
 +        fprintf(g_dump, "# Tag Force Recomp: gravacao do mouse. F = quadro exibido; S = sprite 2D (x0 y0 x1 y1 u0 v0 u1 v1 textura cor);\n"
-+                        "# R = linha de texto; Q = quad 3D texturizado (carta); B = botoes do PSP (hex) e mouse 480x272 a partir daquele quadro\n");
++                        "# R = linha de texto; Q = quad 3D texturizado (carta); B = botoes do PSP (hex) e mouse 480x272 a partir daquele quadro; M = mouse mudou de lugar;\n"
++                        "# U = estado do mouse nas cartas: modo(1 Deck Edit, 2 duelo) cartas cursor fileira_do_cursor pausado alvo_coluna alvo_fileira\n");
 +    }
 +    g_dump_on = !g_dump_on; g_dump_hash = 0; g_dump_lastb = ~0u;
 +    fprintf(g_dump, "# gravacao %s no quadro %llu\n", g_dump_on ? "LIGADA" : "desligada", (unsigned long long)g_dump_frame); fflush(g_dump);
@@ -419,7 +541,7 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
  }
  
  namespace {
-@@ -180,40 +278,264 @@
+@@ -180,40 +360,347 @@
  void stab_update() {
      if (g_sel != g_stab_sel) { g_stab_sel = g_sel; g_stab_n = 0; } else g_stab_n++;
  }
@@ -438,7 +560,7 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 + *    32x32) fica em cima dela, ~17 px a direita da borda da carta. Sem a maozinha o jogador nao esta escolhendo carta (animacao, vez do CPU).
 + * Aqui o mouse so age no CLIQUE (passar o mouse nao mexe o cursor: nessas telas abrem janelinhas que tambem usam o direcional). */
 +namespace {
-+struct Item { int x0, y0, x1, y1, col, row; };
++struct Item { int x0, y0, x1, y1, col, row, ax = -999, ay = -999; bool zone = false; };   /* ax,ay = onde fica a maozinha quando o cursor esta nesta carta/zona */
 +std::vector<Item> g_items;    /* cartas clicaveis do quadro exibido */
 +int g_isel = -1;              /* carta onde o cursor do jogo esta (-1 = nao da para saber) */
 +int g_imode;                  /* 0 = nada, 1 = grade do Deck Edit, 2 = mao do duelo */
@@ -520,7 +642,37 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 +        bool dup = false; for (Item &b : it) if (std::abs(b.x0 - q.x0) <= 2 && std::abs(b.y0 - q.y0) <= 2) { dup = true; break; }
 +        if (!dup) it.push_back({q.x0, q.y0, q.x1, q.y1, 0, 0});
 +    }
-+    if (it.size() < 2 && nhand < 2) return;
++    /* onde a maozinha fica em cada carta (medido): na mao, 17 px a direita da borda e em y=193; no campo, no meio da carta, ~2 px abaixo do topo */
++    for (size_t i = 0; i < it.size(); i++) {
++        if (i < nhand) { it[i].ax = it[i].x0 + 17; it[i].ay = 193; }
++        else { it[i].ax = (it[i].x0 + it[i].x1) / 2; it[i].ay = it[i].y0 + 2; }
++    }
++    /* Zonas VAZIAS do seu lado: o cursor do jogo passa por elas (para invocar, baixar, olhar), entao tambem sao alvos. Posicoes da maozinha
++     * medidas nas gravacoes (visao normal do campo): monstros em y=145, x 226/270/314/358/401 (passo ~44); magias/armadilhas em y=181,
++     * x 218/266/314/361/409 (passo ~47). As fileiras sao centradas em x=314. Uma zona com carta ja e a propria carta. */
++    if (nhand >= 1 || it.size() > nhand) {
++        static const int kMonX[5] = {226, 270, 314, 358, 401}, kStX[5] = {218, 266, 314, 361, 409};
++        auto zone = [&](int px, int py, int half, int y0, int y1) {
++            for (const Item &c : it) if (c.ax != -999 && std::abs(c.ax - px) <= 8 && std::abs(c.ay - py) <= 10) return;   /* ja tem carta ali */
++            Item z{px - half, y0, px + half, y1, 0, 0}; z.ax = px; z.ay = py; z.zone = true; it.push_back(z);
++        };
++        for (int k = 0; k < 5; k++) zone(kMonX[k], 145, 21, 141, 173);
++        for (int k = 0; k < 5; k++) zone(kStX[k], 181, 23, 174, 205);
++        /* lado do oponente (mais longe da camera, mais estreito): monstros em y=99, x 236/275/314/352/391 (passo ~39); magias/armadilhas em
++         * y=75, x 242/278/314/349/385 (passo ~36). O cursor passa por elas ao olhar o campo; ao escolher alvo de ataque so para nos monstros */
++        static const int kOppMonX[5] = {236, 275, 314, 352, 391}, kOppStX[5] = {242, 278, 314, 349, 385};
++        for (int k = 0; k < 5; k++) zone(kOppMonX[k], 99, 19, 99, 122);
++        for (int k = 0; k < 5; k++) zone(kOppStX[k], 75, 18, 73, 99);
++        /* pilhas: o SEU deck (canto direito; a maozinha comeca nele no inicio do seu turno, x=448 y=175) e a pilha do oponente (canto de
++         * cima a esquerda, x=208 y=61). Retangulos clicaveis em volta; o deck fica na fileira das magias/armadilhas, a direita delas */
++        auto pile = [&](int px, int py, int x0, int y0, int x1, int y1) {
++            for (const Item &c : it) if (c.ax != -999 && std::abs(c.ax - px) <= 8 && std::abs(c.ay - py) <= 10) return;
++            Item z{x0, y0, x1, y1, 0, 0}; z.ax = px; z.ay = py; z.zone = true; it.push_back(z);
++        };
++        pile(448, 175, 434, 162, 480, 206);
++        pile(208, 61, 186, 40, 232, 72);
++    }
++    if (it.size() < 2) return;
 +    /* fileiras do campo: y parecido = mesma fileira (de cima para baixo); a mao e a ultima */
 +    {
 +        std::vector<int> ys; std::vector<size_t> fi;
@@ -533,9 +685,9 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 +    for (const Spr &a : g_snap) {
 +        if (a.x1 - a.x0 != 32 || a.y1 - a.y0 != 32) continue;
 +        for (size_t i = 0; i < it.size(); i++) {
-+            const int dx = a.x0 - it[i].x0, dy = a.y0 - it[i].y0;
-+            if (dx < 8 || dx > 24 || dy < -18 || dy > 10) continue;
-+            const int d = std::abs(dx - 16) + std::abs(dy + 4);
++            const int dx = a.x0 - it[i].ax, dy = a.y0 - it[i].ay;
++            if (std::abs(dx) > 6 || dy < -10 || dy > (it[i].row == 1000 ? 14 : 10)) continue;   /* na mao a maozinha desce ~12 px enquanto a carta sobe */
++            const int d = std::abs(dx) + std::abs(dy);
 +            if (d < best) { best = d; cur = (int)i; }
 +        }
 +    }
@@ -548,46 +700,84 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 +
 +int g_istab_sel = -2, g_istab_n, g_burst_from = -1;
 +int g_burst_axis, g_blocked_axis;   /* 1 = horizontal, 2 = vertical: eixo da ultima rajada / eixo em que o cursor nao andou */
-+uint32_t update_items(uint64_t frame, bool inside, int mx, int my, bool l_edge, uint32_t user_dpad, bool *eat_cross, uint32_t out) {
++/* Passar o mouse pelas cartas do duelo leva o cursor do jogo junto (como no direcional). Fica PAUSADO enquanto uma janelinha pode estar
++ * aberta (Invocar/Baixar, escolher zona...), porque ela tambem usa o direcional: pausa quando o jogador confirma (X, do mouse ou do teclado)
++ * ou quando o cursor nao anda; volta quando a maozinha muda de carta ou some e reaparece (janela fechou, vez passou), ou com O (cancelar). */
++bool g_hover_pause; int g_pause_sel = -2;
++std::vector<std::pair<int, int>> g_unreach;   /* cartas/zonas que o cursor nao alcancou desde a ultima vez que ele andou (ex.: zona vazia do oponente ao escolher alvo) */
++int g_unreach_sel = -2, g_burst_dist = -1;
++bool unreachable(const Item &a) { for (auto &u : g_unreach) if (u.first == a.ax && u.second == a.ay) return true; return false; }
++int item_dist(const Item &t, const Item &c) { return t.row != c.row ? 100 * std::abs((t.row == 1000 ? 9 : t.row) - (c.row == 1000 ? 9 : c.row)) + 50 : std::abs(t.col - c.col); }
++uint32_t update_items(uint64_t frame, bool inside, bool moved, int mx, int my, bool l_edge, uint32_t user_dpad, bool *eat_cross, uint32_t out) {
 +    if (g_isel != g_istab_sel) { g_istab_sel = g_isel; g_istab_n = 0; } else g_istab_n++;
 +    if (g_isel >= 0) g_sel_seen = frame;
++    if (g_hover_pause && g_isel != g_pause_sel && !g_pending) {   /* a maozinha mudou de lugar (ou sumiu e voltou) sem ser por nos */
++        if (g_isel >= 0) { g_hover_pause = false; if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: passar o mouse liberado de novo\n", (unsigned long long)frame); }
++        g_pause_sel = g_isel;
++    }
++    if (g_isel != g_unreach_sel) { g_unreach_sel = g_isel; g_unreach.clear(); }   /* o cursor andou: tenta de novo o que antes nao deu */
 +    int hover = -1;
 +    if (inside) for (size_t i = 0; i < g_items.size(); i++) if (mx >= g_items[i].x0 && mx < g_items[i].x1 && my >= g_items[i].y0 && my < g_items[i].y1) hover = (int)i;
 +    if (user_dpad) { g_tkx = g_tky = -1; g_pending = false; return out; }
 +    int tgt = -1; for (size_t i = 0; i < g_items.size(); i++) if (g_items[i].col == g_tkx && g_items[i].row == g_tky) tgt = (int)i;
-+    if (l_edge && hover >= 0 && g_isel >= 0) {
++    if (l_edge && hover >= 0 && g_isel >= 0 && g_imode == 2 && unreachable(g_items[hover])) {
++        *eat_cross = true;   /* clique numa zona que o cursor nao alcanca agora (ex.: vazia, ao escolher alvo): nao faz nada (nao confirma a carta atual) */
++    } else if (l_edge && hover >= 0 && g_isel >= 0) {
 +        g_tkx = g_items[hover].col; g_tky = g_items[hover].row; g_taps = 0; trim_burst(frame);
-+        tgt = hover; g_pending = true; g_pending_until = frame + 150; *eat_cross = true; g_blocked_axis = 0; g_burst_from = -1;
++        tgt = hover; g_pending = true; g_pending_until = frame + 150; *eat_cross = true; g_blocked_axis = 0; g_burst_from = -1; g_hover_pause = false;
 +        if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: clique na carta %d (coluna %d, linha %d); cursor na %d\n", (unsigned long long)frame, hover, g_tkx, g_tky, g_isel);
++    } else if (g_imode == 2 && !g_hover_pause && !g_pending && moved && hover >= 0 && hover != tgt && g_isel >= 0 && !unreachable(g_items[hover])) {
++        g_tkx = g_items[hover].col; g_tky = g_items[hover].row; g_taps = 0; trim_burst(frame); g_blocked_axis = 0; g_burst_from = -1;
++        tgt = hover;
 +    }
 +    if (g_pending && frame > g_pending_until) g_pending = false;
-+    if (tgt < 0 || !g_pending) { g_tkx = g_tky = -1; g_pending = false; return out; }
++    if (tgt < 0) { g_tkx = g_tky = -1; g_pending = false; return out; }
 +    if (burst_running(frame)) return out;
 +    if (g_burst_n) { g_burst_end = g_burst_start + (uint64_t)g_burst_n * g_period; g_burst_n = 0; }
 +    if (frame < g_pulse_end + 2 || frame < g_next_tap) return out;
-+    if (g_isel < 0) { if (frame - g_sel_seen >= 12) { g_pending = false; g_tkx = g_tky = -1; } return out; }   /* cursor sumiu (janela, animacao): desiste */
-+    if (g_istab_n < 2 || frame < g_burst_end + kSettle) return out;
++    if (g_isel < 0) { if (!g_pending || frame - g_sel_seen >= 12) { g_pending = false; g_tkx = g_tky = -1; } return out; }   /* cursor sumiu (janela, animacao): desiste */
++    /* a maozinha/moldura responde ~4-5 quadros depois do aperto (medido nas gravacoes): espera menos que nas listas, cujo realce anima */
++    if (g_istab_n < 2 || frame < g_burst_end + 8) return out;
++    auto give_up = [&](const char *why) {
++        if (g_imode == 2 && tgt >= 0) {
++            g_unreach.push_back({g_items[tgt].ax, g_items[tgt].ay});   /* nao insiste nesta ate o cursor andar */
++            /* passando o mouse por uma CARTA e o cursor nao anda: alguma janelinha usa o direcional, pausa. Zona vazia que nao da para alcancar
++             * (escolhendo alvo de ataque o cursor so para nos monstros) so fica marcada, sem pausar o resto */
++            if (!g_pending && !g_items[tgt].zone) { g_hover_pause = true; g_pause_sel = g_isel; }
++        }
++        g_pending = false; g_tkx = g_tky = -1; g_blocked_axis = 0;
++        if (g_mtrace) fprintf(stderr, "[mouse] %s: desisti\n", why);
++    };
 +    if (g_burst_from >= 0) {
 +        /* a ultima rajada nao mexeu o cursor: ou aquele eixo esta bloqueado (linha incompleta no fim da grade: tenta o outro eixo), ou outra coisa
 +         * esta usando o direcional (janelinha aberta: os dois eixos falham, desiste sem confirmar nada) */
-+        const bool moved = g_isel != g_burst_from; g_burst_from = -1;
-+        if (moved) g_blocked_axis = 0;
++        const bool mv = g_isel != g_burst_from; g_burst_from = -1;
++        if (mv && g_imode == 2 && tgt != g_isel && g_burst_dist >= 0 && item_dist(g_items[tgt], g_items[g_isel]) >= g_burst_dist) {
++            give_up("o cursor andou mas nao chegou mais perto (o jogo pula esta zona)"); return out;
++        }
++        if (mv) g_blocked_axis = 0;
 +        else if (tgt != g_isel) {
-+            if (g_blocked_axis && g_blocked_axis != g_burst_axis) { g_pending = false; g_tkx = g_tky = -1; g_blocked_axis = 0; if (g_mtrace) fprintf(stderr, "[mouse] o cursor nao andou: desisti\n"); return out; }
++            if (g_blocked_axis && g_blocked_axis != g_burst_axis) { give_up("o cursor nao andou"); return out; }
++            if (!g_pending && g_imode == 2) { give_up("o cursor nao andou (passando o mouse)"); return out; }
 +            g_blocked_axis = g_burst_axis;
 +        }
 +    }
-+    if (tgt == g_isel) { confirm_pulse(frame, "carta", tgt); return g_pulse; }
-+    if (g_taps >= 10) { g_pending = false; g_tkx = g_tky = -1; return out; }
++    if (tgt == g_isel) {
++        if (g_pending) { confirm_pulse(frame, "carta", tgt); return g_pulse; }
++        g_tkx = g_tky = -1; return out;   /* passando o mouse: chegou, nao confirma */
++    }
++    if (g_taps >= 10) { give_up("passos demais"); return out; }
 +    const Item &t = g_items[tgt], &c = g_items[g_isel];
 +    const int dx = t.col - c.col, dy = t.row - c.row;
 +    int axis = dx && g_blocked_axis != 1 ? 1 : dy && g_blocked_axis != 2 ? 2 : 0;
 +    if (g_imode == 2 && dy && g_blocked_axis != 2) axis = 2;   /* duelo: primeiro chega na fileira certa */
-+    if (!axis) { g_pending = false; g_tkx = g_tky = -1; g_blocked_axis = 0; if (g_mtrace) fprintf(stderr, "[mouse] sem caminho ate a carta: desisti\n"); return out; }
-+    if (axis == 1) { g_burst_dir = dx > 0 ? 0x20 : 0x80; g_burst_n = std::abs(dx); }
++    if (!axis) { give_up("sem caminho ate a carta"); return out; }
++    /* no campo do duelo, um passo por vez: conforme o momento o jogo para nas zonas vazias (olhando o campo) ou pula elas (escolhendo alvo de
++     * ataque), entao contar colunas pode passar do alvo. Na mao (sem buracos) vai de uma vez */
++    if (axis == 1) { g_burst_dir = dx > 0 ? 0x20 : 0x80; g_burst_n = (g_imode == 2 && c.row != 1000) ? 1 : std::abs(dx); }
 +    else { g_burst_dir = dy > 0 ? 0x40 : 0x10; g_burst_n = g_imode == 2 ? 1 : std::abs(dy); }   /* duelo: as fileiras tem buracos e o jogo escolhe a coluna ao trocar de fileira: um passo por vez */
-+    g_burst_axis = axis; g_burst_start = frame; g_taps++; g_burst_from = g_isel;
-+    if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: carta %d -> %d, rajada de %d (%02x)\n", (unsigned long long)frame, g_isel, tgt, g_burst_n, g_burst_dir);
++    g_burst_axis = axis; g_burst_start = frame; g_taps++; g_burst_from = g_isel; g_burst_dist = item_dist(t, c);
++    if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: carta %d -> %d, rajada de %d (%02x)%s\n", (unsigned long long)frame, g_isel, tgt, g_burst_n, g_burst_dir, g_pending ? "" : " (passando o mouse)");
 +    return out | g_burst_dir;
 +}
  }
@@ -603,7 +793,7 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 -    if (g_list.empty()) { g_tkx = g_tky = -1; g_pending = false; return out; }
 +    if (burst_running(frame) && frame >= g_burst_start && (frame - g_burst_start) % (uint64_t)g_period < (uint64_t)g_period / 2) out |= g_burst_dir;
 +    if (g_list.empty()) {
-+        if (!g_items.empty()) return update_items(frame, inside, mx, my, l_edge, user_dpad, eat_cross, out);
++        if (!g_items.empty()) return update_items(frame, inside, moved, mx, my, l_edge, user_dpad, eat_cross, out);
 +        g_tkx = g_tky = -1; g_pending = false; return out;
 +    }
      stab_update();
@@ -675,8 +865,13 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 +bool g_mprev[MUI_NB]; uint64_t g_mhold_until[MUI_NB]; bool g_owned;
 +}
 +
-+uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_dpad) {
-+    g_dump_mx = m.inside ? m.mx : -1; g_dump_my = m.inside ? m.my : -1;
++uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_buttons) {
++    const uint32_t user_dpad = user_buttons & 0xf0;
++    {   /* gravacao F4: posicao do mouse a cada mudanca (para estudar o 'passar o mouse') */
++        const int nx = m.inside ? m.mx : -1, ny = m.inside ? m.my : -1;
++        if (g_dump_on && g_dump && (nx != g_dump_mx || ny != g_dump_my)) { int n = fprintf(g_dump, "M %llu %d %d\n", (unsigned long long)frame, nx, ny); g_dump_bytes += n > 0 ? n : 0; }
++        g_dump_mx = nx; g_dump_my = ny;
++    }
 +    bool down[MUI_NB], edge[MUI_NB];
 +    for (int i = 0; i < MUI_NB; i++) {
 +        const bool raw = m.in_client && m.down[i];
@@ -696,11 +891,21 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.cpp src/tagforcerecomp-preview-master/r
 +    } else if (edge[MUI_BL]) g_owned = false;
 +    if (!down[MUI_BL]) g_owned = false;
 +    for (int i = 0; i < MUI_NB; i++) if (down[i] && !(i == MUI_BL && g_owned)) b |= kMouseBit[i];
++    /* cartas do duelo: confirmar (X) pode abrir uma janelinha -> pausa o 'passar o mouse'; cancelar (O) fecha -> libera */
++    static uint32_t prev_all;
++    const uint32_t all = b | user_buttons, rise = all & ~prev_all; prev_all = all;
++    if (rise & 0x4000) { g_hover_pause = true; g_pause_sel = g_isel; }
++    if (rise & 0x2000) g_hover_pause = false;
++    if (g_dump_on && g_dump) {   /* gravacao F4: o que o modulo enxergou e decidiu (cartas, cursor, pausa, alvo), a cada mudanca */
++        static std::string last;
++        char st[160]; snprintf(st, sizeof st, "%d %zu %d %d %d %d %d", g_imode, g_items.size(), g_isel, g_isel >= 0 ? g_items[g_isel].row : -1, (int)g_hover_pause, g_tkx, g_tky);
++        if (last != st) { last = st; int n = fprintf(g_dump, "U %llu %s\n", (unsigned long long)frame, st); g_dump_bytes += n > 0 ? n : 0; }
++    }
 +    return b;
  }
 diff -ruN -x '*.o' orig/runtime/mouse_ui.h src/tagforcerecomp-preview-master/runtime/mouse_ui.h
 --- a/runtime/mouse_ui.h	2026-10-18 21:05:35.920979270 +0000
-+++ b/runtime/mouse_ui.h	2026-10-18 22:08:49.656138241 +0000
++++ b/runtime/mouse_ui.h	2026-10-19 11:00:32.715070687 +0000
 @@ -12,6 +12,22 @@
  /* sceDisplaySetFrameBuf: o buffer vira o quadro exibido; seus sprites viram a tela atual */
  void mui_set_frame(uint32_t fb);
@@ -718,7 +923,7 @@ diff -ruN -x '*.o' orig/runtime/mouse_ui.h src/tagforcerecomp-preview-master/run
 + * tomado pelo mouse nos menus nunca vira X por conta propria (nem depois que a tela troca, com o botao ainda apertado). */
 +enum { MUI_BL, MUI_BR, MUI_BM, MUI_BX1, MUI_BX2, MUI_NB };
 +struct MuiMouse { bool in_client, inside; int mx, my; bool down[MUI_NB], clicked[MUI_NB]; };
-+uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_dpad);
++uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_buttons);   /* user_buttons = botoes do teclado/controle deste quadro */
 +
 +/* Gravacao para desenvolver o mouse em telas que nao sao listas (Deck Edit, duelo): F4 liga/desliga. Grava, por quadro exibido, os sprites 2D,
 + * as linhas de texto e os quads 3D texturizados (cartas), mais os botoes e o mouse, em logs/<sessao>_mouse.txt. */
@@ -887,6 +1092,58 @@ diff -ruN -x '*.o' orig/tools/teste_mouse/campo.cpp src/tagforcerecomp-preview-m
 +  bool ok = xs==1 && sel==target && !wrongx;
 +  printf("%d %d cartas=%d linha_alvo=%d alvo=%d final=%d X=%d passos=%d\n",ok,seed,n,cs[target].row,target,sel,xs,moves);
 +}
+diff -ruN -x '*.o' orig/tools/teste_mouse/campo_zonas.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/campo_zonas.cpp
+--- a/tools/teste_mouse/campo_zonas.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/campo_zonas.cpp	2026-10-19 12:23:27.999834554 +0000
+@@ -0,0 +1,48 @@
++// Campo do duelo com ZONAS (geometria medida nas gravacoes F4): suas 5 zonas de monstro e 5 de magia/armadilha sao sempre navegaveis
++// (vazias ou nao), e as 10 do oponente tambem. Modo 0 = clicar; modo 1 = passar o mouse; modo 2 = ESCOLHER ALVO DE ATAQUE: o cursor so anda
++// entre os monstros do oponente; modo 3 = INICIO DO TURNO: a maozinha comeca no deck (x=448, y=175) e o mouse para numa carta/zona; (esquerda/direita), o mouse passeia por zonas vazias e para num monstro (tem que chegar, sem travar, sem X).
++#include "mouse_ui.h"
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++#include <random>
++#include <algorithm>
++struct S { int row, px, py; bool card; int x, y, w, h; };   // px,py = maozinha
++int main(int argc,char**argv){
++  int seed=atoi(argv[1]), modo=atoi(argv[2]); std::mt19937 rng(seed); int lag=3+rng()%3;
++  std::vector<S> sl;
++  int ox[5]={236,275,314,352,391}, ost[5]={242,278,314,349,385}, mxz[5]={226,270,314,358,401}, sx[5]={218,266,314,361,409};
++  for(int z=0;z<5;z++){ bool c=rng()%3==0; sl.push_back({-1,ost[z],75,c,ost[z]-11,77,23,19}); }
++  for(int z=0;z<5;z++){ bool c=modo==2? (z%2==0 || rng()%2) : rng()%3==0; sl.push_back({0,ox[z],99,c,ox[z]-17,102,33,15}); }
++  for(int z=0;z<5;z++){ bool c=rng()%3==0; sl.push_back({1,mxz[z],145,c,mxz[z]-14,143,28,27}); }
++  for(int z=0;z<5;z++){ bool c=rng()%3==0; sl.push_back({2,sx[z],181,c,sx[z]-15,176,30,32}); }
++  int deck=-1; if(modo==3){ deck=sl.size(); sl.push_back({2,448,175,false,0,0,0,0}); }
++  int nh=2+rng()%5, hx0=240-nh*47/2; for(int i=0;i<nh;i++) sl.push_back({3,hx0+47*i+17,193,true,hx0+47*i,219,45,64});
++  int n=sl.size();
++  auto row=[&](int r){ std::vector<int> v; for(int i=0;i<n;i++) if(sl[i].row==r) v.push_back(i); return v; };
++  std::vector<int> oppm; for(int i=0;i<n;i++) if(sl[i].row==0&&sl[i].card) oppm.push_back(i);
++  int sel; if(modo==2) sel=oppm[rng()%oppm.size()]; else if(modo==3) sel=deck; else { auto h=row(3); sel=h[rng()%h.size()]; }
++  int target= modo==2 ? oppm[rng()%oppm.size()] : (int)(rng()%n); if(modo==3) while(target==deck) target=rng()%n; int clickf=60+rng()%30;
++  std::vector<int> hist; uint32_t prev=0; int xs=0, moves=0;
++  for(int f=1;f<900;f++){
++    hist.push_back(sel); int ds=hist.size()>(size_t)lag?hist[hist.size()-1-lag]:hist[0];
++    for(int i=0;i<n;i++){ const S&c=sl[i]; if(!c.card) continue; int y=c.y-(c.row==3&&i==ds?13:0); mui_quad(0,c.x,y,c.x+c.w,y+c.h,0x98b4e40); mui_quad(0,c.x,y,c.x+c.w,y+c.h,0x9d00000+i*0x800); }
++    mui_quad(0,281,125,313,141,0x99f08c0); mui_quad(0,205,123,461,140,0x99efb90);   // enfeites da mesa
++    mui_prim(0,sl[ds].px,sl[ds].py,sl[ds].px+32,sl[ds].py+32,64,96,96,128,0x9925340,0);
++    mui_set_frame(0);
++    const S&t=sl[target]; int mx=t.px, my=(t.row==3?250:t.py+(t.row==1?8:10));
++    if((modo==1||modo==2) && f<clickf){ int k=(f/11)%n; if(modo==2){ k=(f/11)%5; k=5+k; } mx=sl[k].px; my=(sl[k].row==3?250:sl[k].py+8); }
++    MuiMouse m{}; m.in_client=m.inside=true; m.mx=(modo==0&&f<clickf)?5:mx; m.my=(modo==0&&f<clickf)?5:my;
++    if(modo==0){ m.down[0]=f>=clickf&&f<clickf+4; m.clicked[0]=f==clickf; }
++    uint32_t b=mui_mouse(f,m,true,0);
++    if(f%2==0){ uint32_t e=b&~prev; prev=b; int old=sel;
++      if(modo==2){ if(e&0xa0){ int k=std::find(oppm.begin(),oppm.end(),sel)-oppm.begin(); if(e&0x20&&k+1<(int)oppm.size()) sel=oppm[k+1]; if(e&0x80&&k>0) sel=oppm[k-1]; } }
++      else if(e&0xa0){ auto v=row(sl[sel].row); int k=std::find(v.begin(),v.end(),sel)-v.begin(); if(e&0x20&&k+1<(int)v.size()) sel=v[k+1]; if(e&0x80&&k>0) sel=v[k-1]; }
++      if(modo!=2 && (e&0x50)){ int d=(e&0x40)?1:-1; for(int r=sl[sel].row+d;r>=-1&&r<=3;r+=d){ auto v=row(r); if(v.empty()) continue; int bi=v[0]; for(int i:v) if(std::abs(sl[i].px-sl[sel].px)<std::abs(sl[bi].px-sl[sel].px)) bi=i; sel=bi; break; } }
++      if(sel!=old) moves++;
++      if(e&0x4000) xs++;
++    }
++  }
++  bool ok = sel==target && xs==(modo==0?1:0);   // modo 3: comeca no deck (inicio do turno) e so passa o mouse
++  printf("%d %d modo=%d slots=%d linha_alvo=%d alvo=%d vazio=%d final=%d X=%d passos=%d\n",ok,seed,modo,n,sl[target].row,target,(int)!sl[target].card,sel,xs,moves);
++}
 diff -ruN -x '*.o' orig/tools/teste_mouse/cartas.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/cartas.cpp
 --- a/tools/teste_mouse/cartas.cpp	1970-01-01 00:00:00.000000000 +0000
 +++ b/tools/teste_mouse/cartas.cpp	2026-10-18 22:34:07.484373925 +0000
@@ -1026,6 +1283,98 @@ diff -ruN -x '*.o' orig/tools/teste_mouse/cenarios.cpp src/tagforcerecomp-previe
 +    printf("%-58s selecao final %d, %d passos dados pelo jogo (esperado: 4, 4 passos)\n","S8 varredura lenta com micro-movimentos",r.final_sel,r.moves); }
 +  return 0;
 +}
+diff -ruN -x '*.o' orig/tools/teste_mouse/fases.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/fases.cpp
+--- a/tools/teste_mouse/fases.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/fases.cpp	2026-10-19 12:13:45.440887840 +0000
+@@ -0,0 +1,35 @@
++// Selecao de fase (geometria medida): 6 icones 20x32 em y=124, passo 40, x=204..404; realce = moldura de 9 pedacos com 5 px de folga.
++// Fases indisponiveis (desenhadas com v=32) sao puladas pelo jogo. modo 0: clicar numa fase; modo 1: passar o mouse e parar numa fase.
++#include "mouse_ui.h"
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++#include <random>
++int main(int argc,char**argv){
++  int seed=atoi(argv[1]), modo=atoi(argv[2]); std::mt19937 rng(seed); int lag=2+rng()%4;
++  bool dis[6]; int sel=2+rng()%2; for(int i=0;i<6;i++) dis[i]= i!=sel && rng()%3==0;
++  int target; do target=rng()%6; while(dis[target]);
++  std::vector<int> hist; uint32_t prev=0; int xs=0; int clickf=40+rng()%30;
++  for(int f=1;f<500;f++){
++    hist.push_back(sel); int ds=hist.size()>(size_t)lag?hist[hist.size()-1-lag]:hist[0];
++    for(int i=0;i<6;i++){ int x=204+40*i; float v=dis[i]?32:0; mui_prim(0,x,124,x+20,156,i*20.f,v,i*20.f+20,v+32,0x99ba7c0,0xffffffff); if(i<5) mui_prim(0,x+27,135,x+34,146,120,32,127,43,0x99ba7c0,0xffffffff); }
++    int hx=204+40*ds-5; uint32_t T=0x88951f0, C=0xa70080ff;
++    mui_prim(0,hx,120,hx+4,124,0,112,4,116,T,C); mui_prim(0,hx+4,120,hx+26,124,4,112,8,116,T,C); mui_prim(0,hx+26,120,hx+30,124,8,112,12,116,T,C);
++    mui_prim(0,hx,124,hx+4,156,0,116,4,120,T,C); mui_prim(0,hx+4,124,hx+26,156,4,116,8,120,T,C); mui_prim(0,hx+26,124,hx+30,156,8,116,12,120,T,C);
++    mui_prim(0,hx,156,hx+4,160,0,120,4,124,T,C); mui_prim(0,hx+4,156,hx+26,160,4,120,8,124,T,C); mui_prim(0,hx+26,156,hx+30,160,8,120,12,124,T,C);
++    mui_quad(0,267,219,312,283,0x98b4e40); mui_quad(0,314,219,360,283,0x98b4e40);   // cartas da mao ao fundo
++    mui_set_frame(0);
++    int mx=204+40*target+10, my=140;
++    if(modo==1 && f<clickf){ int k=(f/9)%6; mx=204+40*k+10; }
++    MuiMouse m{}; m.in_client=m.inside=true; m.mx=(modo==0&&f<clickf)?5:mx; m.my=(modo==0&&f<clickf)?5:my;
++    if(modo==0){ m.down[0]=f>=clickf&&f<clickf+4; m.clicked[0]=f==clickf; }
++    uint32_t b=mui_mouse(f,m,true,0);
++    if(f%2==0){ uint32_t e=b&~prev; prev=b;
++      if(e&0x20){ int i=sel+1; while(i<6&&dis[i]) i++; if(i<6) sel=i; }
++      if(e&0x80){ int i=sel-1; while(i>=0&&dis[i]) i--; if(i>=0) sel=i; }
++      if(e&0x4000){ xs++; if(sel!=target) printf("X FORA "); }
++    }
++  }
++  bool ok= sel==target && xs==(modo==0?1:0);
++  printf("%d %d modo=%d alvo=%d final=%d X=%d\n",ok,seed,modo,target,sel,xs);
++}
+diff -ruN -x '*.o' orig/tools/teste_mouse/hover_duelo.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/hover_duelo.cpp
+--- a/tools/teste_mouse/hover_duelo.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/hover_duelo.cpp	2026-10-19 11:01:54.269006469 +0000
+@@ -0,0 +1,49 @@
++// Passar o mouse no duelo. Modelo do campo igual ao campo.cpp (geometria medida).
++// Roteiro: 1) mouse passeia pelas cartas e para numa: a maozinha tem que ir ate ela, sem nenhum X.
++//          2) jogador aperta X no teclado: abre janelinha (o direcional passa a mexer a janela). Mouse passeia: NENHUM toque deve chegar a janela.
++//          3) jogador aperta O: janela fecha. Mouse para numa carta: a maozinha tem que ir ate ela de novo.
++#include "mouse_ui.h"
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++#include <random>
++#include <algorithm>
++struct C { int row, x, y, w, h, px, py; };
++int main(int argc,char**argv){
++  int seed=atoi(argv[1]); std::mt19937 rng(seed); int lag=3+rng()%3;
++  std::vector<C> cs; int zx[5]={183,226,270,314,357};
++  for(int r=0;r<3;r++) for(int z=0;z<5;z++) if(rng()%2){ if(r==0) cs.push_back({0,zx[z]-17,102,33,15,17,-3}); if(r==1) cs.push_back({1,zx[z]-14,143,28,27,14,2}); if(r==2) cs.push_back({2,zx[z]-15,176,30,32,15,5}); }
++  int nh=3+rng()%4, hx0=240-nh*47/2; for(int i=0;i<nh;i++) cs.push_back({3,hx0+47*i,219,45,64,17,-13});
++  int n=cs.size();
++  auto rowcards=[&](int r){ std::vector<int> v; for(int i=0;i<n;i++) if(cs[i].row==r) v.push_back(i); std::sort(v.begin(),v.end(),[&](int a,int b){return cs[a].x<cs[b].x;}); return v; };
++  int sel; { auto h=rowcards(3); sel=h[rng()%h.size()]; }
++  int t1=rng()%n, t3=rng()%n;
++  std::vector<int> hist; uint32_t prev=0; int xs=0, popup_moves=0; bool popup=false; int sel_at_1=-1;
++  auto mouse_on=[&](int i,int&mx,int&my){ const C&c=cs[i]; mx=c.x+c.w/2; my=(c.row==3?250:c.y+c.h/2); };
++  for(int f=1;f<900;f++){
++    hist.push_back(sel); int ds=hist.size()>(size_t)lag?hist[hist.size()-1-lag]:hist[0];
++    for(int i=0;i<n;i++){ const C&c=cs[i]; int y=c.y-(c.row==3&&i==ds?13:0); mui_quad(0,c.x,y,c.x+c.w,y+c.h,0x98b4e40); mui_quad(0,c.x,y,c.x+c.w,y+c.h,0x9d00000+i*0x800); }
++    { const C&c=cs[ds]; mui_prim(0,c.x+c.px,c.y+c.py,c.x+c.px+32,c.y+c.py+32,64,96,96,128,0x9925340,0); }
++    mui_set_frame(0);
++    int mx=5,my=5, kb=0;
++    if(f<200){ if(f<150){ int k=(f/9)%n; mouse_on(k,mx,my); mx+= (f%3)-1; } else mouse_on(t1,mx,my); }
++    else if(f==260) kb=0x4000;                                  // X no teclado: abre a janelinha
++    else if(f>270 && f<500){ int k=(f/7)%n; mouse_on(k,mx,my); mx+=(f%5)-2; }   // passeia com a janela aberta
++    else if(f==520) kb=0x2000;                                  // O: fecha
++    else if(f>540){ mouse_on(t3,mx,my); if(f<560) mx+=f%4; }
++    if(f==200) sel_at_1=sel;
++    MuiMouse m{}; m.in_client=true; m.inside=mx>20; m.mx=mx; m.my=my;
++    uint32_t b=mui_mouse(f,m,true,kb) | kb;
++    if(f%2==0){ uint32_t e=b&~prev; prev=b;
++      if(e&0x4000){ xs++; if(f>=255&&f<=265) popup=true; }
++      if(e&0x2000) popup=false;
++      if(popup){ if(e&0xf0) popup_moves++; }
++      else {
++        if(e&0xa0){ auto v=rowcards(cs[sel].row); int k=std::find(v.begin(),v.end(),sel)-v.begin(); if(e&0x20&&k+1<(int)v.size()) sel=v[k+1]; if(e&0x80&&k>0) sel=v[k-1]; }
++        if(e&0x50){ int d=(e&0x40)?1:-1; for(int r=cs[sel].row+d;r>=0&&r<=3;r+=d){ auto v=rowcards(r); if(v.empty()) continue; int bi=v[0]; for(int i:v) if(std::abs(cs[i].x+cs[i].w/2-(cs[sel].x+cs[sel].w/2))<std::abs(cs[bi].x+cs[bi].w/2-(cs[sel].x+cs[sel].w/2))) bi=i; sel=bi; break; } }
++      }
++    }
++  }
++  bool ok = sel_at_1==t1 && sel==t3 && popup_moves==0 && xs==1;
++  printf("%d %d cartas=%d alvo1=%d chegou1=%d alvo3=%d final=%d toques_na_janela=%d X=%d\n",ok,seed,n,t1,sel_at_1,t3,sel,popup_moves,xs);
++}
 diff -ruN -x '*.o' orig/tools/teste_mouse/reproduzir_gravacao.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/reproduzir_gravacao.cpp
 --- a/tools/teste_mouse/reproduzir_gravacao.cpp	1970-01-01 00:00:00.000000000 +0000
 +++ b/tools/teste_mouse/reproduzir_gravacao.cpp	2026-10-18 23:04:36.740786454 +0000
@@ -1060,10 +1409,44 @@ diff -ruN -x '*.o' orig/tools/teste_mouse/reproduzir_gravacao.cpp src/tagforcere
 +  }
 +  printf("# %d quadros, %d com cartas, %d com cursor\n",n,ni,ns);
 +}
+diff -ruN -x '*.o' orig/tools/teste_mouse/reproduzir_listas.cpp src/tagforcerecomp-preview-master/tools/teste_mouse/reproduzir_listas.cpp
+--- a/tools/teste_mouse/reproduzir_listas.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/teste_mouse/reproduzir_listas.cpp	2026-10-19 11:50:52.427108765 +0000
+@@ -0,0 +1,30 @@
++// imprime, por quadro: lista de texto/barras (tamanho, selecionada) e modo das cartas
++#include "mouse_ui.cpp"
++#include <fstream>
++#include <sstream>
++struct L { char t; int a[4]; float uv[4]; uint32_t tex, col; };
++int main(int argc,char**argv){
++  std::ifstream in(argv[1]); std::string line;
++  std::vector<std::pair<uint64_t,std::vector<L>>> frames; std::vector<L> last;
++  while(std::getline(in,line)){
++    if(line.empty()||line[0]=='#') continue;
++    std::istringstream ss(line); char t; ss>>t;
++    if(t=='F'){ uint64_t fr; std::string a; ss>>fr>>a; if(a=="same") frames.push_back({fr,last}); else frames.push_back({fr,{}}); continue; }
++    if(frames.empty()) continue;
++    L l{}; l.t=t; std::string tx,cl;
++    if(t=='S'){ ss>>l.a[0]>>l.a[1]>>l.a[2]>>l.a[3]>>l.uv[0]>>l.uv[1]>>l.uv[2]>>l.uv[3]>>tx>>cl; l.tex=strtoul(tx.c_str(),0,16); l.col=strtoul(cl.c_str(),0,16); }
++    else if(t=='R'){ ss>>l.a[0]>>l.a[1]>>l.a[2]>>l.a[3]; }
++    else if(t=='Q'){ ss>>l.a[0]>>l.a[1]>>l.a[2]>>l.a[3]>>tx; l.tex=strtoul(tx.c_str(),0,16); }
++    else continue;
++    frames.back().second.push_back(l); last=frames.back().second;
++  }
++  std::string prev; int nl=0, ni=0;
++  for(auto &f:frames){
++    for(auto &l:f.second){ if(l.t=='S') mui_prim(0,l.a[0],l.a[1],l.a[2],l.a[3],l.uv[0],l.uv[1],l.uv[2],l.uv[3],l.tex,l.col); else if(l.t=='R') mui_run(0,l.a[0],l.a[1],l.a[2],l.a[3]); else mui_quad(0,l.a[0],l.a[1],l.a[2],l.a[3],l.tex); }
++    mui_set_frame(0);
++    if(!g_list.empty()) nl++; if(!g_items.empty()) ni++;
++    char b[300]; snprintf(b,sizeof b,"lista=%zu sel=%d%s | cartas=%zu cursor=%d", g_list.size(), g_sel, g_list.empty()?"":(" ["+std::to_string(g_list[0].x0)+","+std::to_string(g_list[0].y0)+" "+std::to_string(g_list[0].x1-g_list[0].x0)+"x"+std::to_string(g_list[0].y1-g_list[0].y0)+"]").c_str(), g_items.size(), g_isel);
++    std::string k=b; if(k!=prev){ printf("%llu %s\n",(unsigned long long)f.first,k.c_str()); prev=k; }
++  }
++  printf("# %zu quadros: %d com lista, %d com cartas\n",frames.size(),nl,ni);
++}
 diff -ruN -x '*.o' orig/tools/teste_mouse/rodar.sh src/tagforcerecomp-preview-master/tools/teste_mouse/rodar.sh
 --- a/tools/teste_mouse/rodar.sh	1970-01-01 00:00:00.000000000 +0000
-+++ b/tools/teste_mouse/rodar.sh	2026-10-18 23:04:36.752317029 +0000
-@@ -0,0 +1,32 @@
++++ b/tools/teste_mouse/rodar.sh	2026-10-19 12:23:28.014073477 +0000
+@@ -0,0 +1,47 @@
 +#!/bin/sh
 +# Testa runtime/mouse_ui.cpp sem o jogo: um menu simulado (le o controle a cada 2 quadros, realce com atraso) recebe o mouse.
 +# Uso (Git Bash/MSYS2 ou Linux): sh tools/teste_mouse/rodar.sh [quantidade de casos aleatorios, padrao 500]
@@ -1076,6 +1459,9 @@ diff -ruN -x '*.o' orig/tools/teste_mouse/rodar.sh src/tagforcerecomp-preview-ma
 +g++ -std=c++17 -O1 -I$R apagados.cpp $R/mouse_ui.cpp -o "$T/apagados"
 +g++ -std=c++17 -O1 -I$R cartas.cpp $R/mouse_ui.cpp -o "$T/cartas"
 +g++ -std=c++17 -O1 -I$R campo.cpp $R/mouse_ui.cpp -o "$T/campo"
++g++ -std=c++17 -O1 -I$R hover_duelo.cpp $R/mouse_ui.cpp -o "$T/hover_duelo"
++g++ -std=c++17 -O1 -I$R campo_zonas.cpp $R/mouse_ui.cpp -o "$T/campo_zonas"
++g++ -std=c++17 -O1 -I$R fases.cpp $R/mouse_ui.cpp -o "$T/fases"
 +echo "== cenarios =="; for i in 1 2 3 4 5 6 7 8 9 10 11; do "$T/cenarios" $i; done
 +echo "== $N casos aleatorios (um processo por caso: o modulo guarda estado) =="
 +: > "$T/r.txt"; s=1; while [ $s -le $N ]; do "$T/aleatorio" $s >> "$T/r.txt"; s=$((s+1)); done
@@ -1095,4 +1481,16 @@ diff -ruN -x '*.o' orig/tools/teste_mouse/rodar.sh src/tagforcerecomp-preview-ma
 +: > "$T/f.txt"; s=1; while [ $s -le $N ]; do "$T/campo" $s >> "$T/f.txt"; s=$((s+1)); done
 +okf=$(grep -c '^1 ' "$T/f.txt" || true); totf=$(wc -l < "$T/f.txt")
 +echo "campo: $okf/$totf corretos (deve ser 100%)"
-+[ "$ok3" = "$tot3" ] && [ "$oka" = "$tota" ] && [ "$okc" = "$totc" ] && [ "$okf" = "$totf" ]
++echo "== $N vezes passando o mouse no duelo (com uma janelinha aberta no meio, que nao pode receber nenhum toque) =="
++: > "$T/h.txt"; s=1; while [ $s -le $N ]; do "$T/hover_duelo" $s >> "$T/h.txt"; s=$((s+1)); done
++okh=$(grep -c '^1 ' "$T/h.txt" || true); toth=$(wc -l < "$T/h.txt"); jan=$(grep -o 'toques_na_janela=[1-9]' "$T/h.txt" | wc -l)
++echo "passar o mouse: $okh/$toth chegaram a tempo; casos com toque na janelinha: $jan (deve ser 0)"
++echo "== $N campos com zonas vazias dos dois lados (clicando, passando o mouse, escolhendo alvo de ataque, comecando no deck) =="
++: > "$T/z.txt"; s=1; while [ $s -le $N ]; do "$T/campo_zonas" $s 0 >> "$T/z.txt"; "$T/campo_zonas" $s 1 >> "$T/z.txt"; "$T/campo_zonas" $s 2 >> "$T/z.txt"; "$T/campo_zonas" $s 3 >> "$T/z.txt"; s=$((s+1)); done
++okz=$(grep -c '^1 ' "$T/z.txt" || true); totz=$(wc -l < "$T/z.txt")
++echo "zonas: $okz/$totz corretos (deve ser 100%)"
++echo "== $N selecoes de fase (com fases indisponiveis no meio) =="
++: > "$T/p.txt"; s=1; while [ $s -le $N ]; do "$T/fases" $s 0 >> "$T/p.txt"; "$T/fases" $s 1 >> "$T/p.txt"; s=$((s+1)); done
++okp=$(grep -c '^1 ' "$T/p.txt" || true); totp=$(wc -l < "$T/p.txt")
++echo "fases: $okp/$totp corretos (deve ser 100%)"
++[ "$ok3" = "$tot3" ] && [ "$oka" = "$tota" ] && [ "$okc" = "$totc" ] && [ "$okf" = "$totf" ] && [ "$jan" = "0" ] && [ "$okz" = "$totz" ] && [ "$okp" = "$totp" ]

@@ -1045,7 +1045,7 @@ static uint32_t read_keys_pc(void) {
         else InterlockedExchange(&g_mouse_activating, 0);
     }
     /* mouse nos menus (mouse_ui.cpp) + botoes do mouse (esquerdo = X, direito = O, meio = triangulo, laterais = L/R) */
-    b |= mui_mouse(g_frames, m, display_mouse_menus(), b & 0xf0);
+    b |= mui_mouse(g_frames, m, display_mouse_menus(), b);   /* b = teclado ate aqui: direcional cancela o mouse; X/O pausam/liberam o passar o mouse no duelo */
     return b | wheel_bits();
 }
 static uint32_t read_keys(void) {

@@ -51,13 +51,17 @@ void analyze_text() {
         for (size_t j = i + 1; j < r.size(); j++) {
             if (std::abs(r[j].x0 - r[i].x0) > 2) continue;
             const int d = r[j].y0 - ch.back().y0;
-            if (!pitch) { if (d >= r[i].y1 - r[i].y0 && d <= 60) { pitch = d; ch.push_back(r[j]); } }
+            /* linhas que se sobrepoem um pouco (passo menor que a altura do texto, ex. a janelinha de opcoes do duelo: passo 15, texto 17)
+             * tambem valem, mas so se um realce marcar exatamente uma delas (verificado no fim) */
+            if (!pitch) { if (d >= std::min(r[i].y1 - r[i].y0, 12) && d <= 60) { pitch = d; ch.push_back(r[j]); } }
             else if (std::abs(d - pitch) <= 1) ch.push_back(r[j]);
         }
         if (ch.size() > best.size()) best = ch;
     }
-    if (best.size() < 3) return;
+    if (best.size() < 2) return;
     const int pitch = best[1].y0 - best[0].y0;
+    /* linhas apertadas, ou so 2 linhas (a caixa 'Attack' do duelo tem 2 opcoes): so valem se um realce marcar exatamente uma (verificado no fim) */
+    const bool tight = pitch < best[0].y1 - best[0].y0 || best.size() < 3;
     int left = best[0].x0, right = best[0].x1;
     for (const Run &b : best) { left = std::min(left, b.x0); right = std::max(right, b.x1); }
     /* realces: componentes de sprites de mesma textura e cor que se tocam */
@@ -87,6 +91,7 @@ void analyze_text() {
         if (ov * 10 >= (h.second - h.first) * 6) { g_sel = (int)i; n++; break; }
     }
     if (n != 1) g_sel = -1;
+    if (tight && g_sel < 0) { g_list.clear(); g_sel = -1; return; }   /* sem realce: texto corrido (descricao da carta, 2 linhas soltas), nao e menu */
     (void)hx0;
 }
 
@@ -114,6 +119,66 @@ void classify_skip() {
     for (auto &c : cnt) { if (c.second > mc) { second = mc; mc = c.second; major = c.first; } else if (c.second > second) second = c.second; }
     if (mc == second) return;   /* empate: nao da para dizer qual e o estilo normal */
     for (size_t i = 0; i < g_list.size(); i++) if ((int)i != g_sel && g_list[i].sig != major) g_skip[i] = true;
+}
+
+/* Fileira de icones iguais com uma moldura de realce em volta de um deles: a escolha de fase do duelo (Draw, Standby, Main 1, Battle,
+ * Main 2, End). Medido (F4): icones de 20x32 de uma textura so, lado a lado com passo 40, em y=124; o realce e uma moldura de 9 pedacos
+ * (outra textura) com ~4-5 px de folga. Fase indisponivel = mesmo icone desenhado com outra parte da textura (v diferente da escolhida);
+ * o jogo pula essas no direcional. Vira uma lista horizontal comum (passar o mouse realca, clicar confirma). */
+bool analyze_icons() {
+    std::map<std::tuple<uint32_t, int, int, int>, std::vector<int>> rows;   /* (textura, y0, w, h) -> sprites */
+    for (size_t i = 0; i < g_snap.size(); i++) {
+        const Spr &a = g_snap[i]; const int w = a.x1 - a.x0, h = a.y1 - a.y0;
+        if (w < 12 || w > 48 || h < 16 || h > 56) continue;
+        rows[std::make_tuple(a.tex, a.y0, w, h)].push_back((int)i);
+    }
+    for (auto &kv : rows) {
+        std::vector<int> v = kv.second;
+        if (v.size() < 4 || v.size() > 10) continue;
+        std::sort(v.begin(), v.end(), [](int a, int b) { return g_snap[a].x0 < g_snap[b].x0; });
+        const int pitch = g_snap[v[1]].x0 - g_snap[v[0]].x0;
+        if (pitch < 24 || pitch > 64) continue;
+        bool even = true; for (size_t k = 1; k < v.size(); k++) if (std::abs(g_snap[v[k]].x0 - g_snap[v[k - 1]].x0 - pitch) > 2) even = false;
+        if (!even) continue;
+        /* realce: componente (mesma textura e cor, se tocando, >= 4 pedacos, outra textura) que envolve exatamente um icone */
+        const uint32_t itex = std::get<0>(kv.first);
+        std::vector<int> comp(g_snap.size()); for (size_t i = 0; i < comp.size(); i++) comp[i] = (int)i;
+        auto find = [&](int x) { while (comp[x] != x) x = comp[x] = comp[comp[x]]; return x; };
+        for (size_t i = 0; i < g_snap.size(); i++) for (size_t j = i + 1; j < g_snap.size(); j++) {
+            const Spr &a = g_snap[i], &b = g_snap[j];
+            if (a.tex == b.tex && a.tex != itex && a.col == b.col && a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1) comp[find((int)i)] = find((int)j);
+        }
+        std::map<int, std::tuple<int, int, int, int, int>> bb;
+        for (size_t i = 0; i < g_snap.size(); i++) {
+            const Spr &a = g_snap[i]; if (a.tex == itex) continue;
+            auto f = bb.find(find((int)i));
+            if (f == bb.end()) bb[find((int)i)] = std::make_tuple(a.x0, a.y0, a.x1, a.y1, 1);
+            else { auto &t = f->second; std::get<0>(t) = std::min(std::get<0>(t), a.x0); std::get<1>(t) = std::min(std::get<1>(t), a.y0); std::get<2>(t) = std::max(std::get<2>(t), a.x1); std::get<3>(t) = std::max(std::get<3>(t), a.y1); std::get<4>(t)++; }
+        }
+        int sel = -1, found = 0;
+        for (auto &b : bb) {
+            if (std::get<4>(b.second) < 4) continue;
+            int in = -1, n = 0;
+            for (size_t k = 0; k < v.size(); k++) {
+                const Spr &a = g_snap[v[k]];
+                const int l = a.x0 - std::get<0>(b.second), t = a.y0 - std::get<1>(b.second), r = std::get<2>(b.second) - a.x1, bo = std::get<3>(b.second) - a.y1;
+                if (l >= 2 && l <= 10 && t >= 2 && t <= 10 && r >= 2 && r <= 10 && bo >= 2 && bo <= 10) { in = (int)k; n++; }
+            }
+            if (n == 1) { sel = in; found++; }
+        }
+        if (found != 1) continue;
+        const int half = std::max(2, (pitch - (g_snap[v[0]].x1 - g_snap[v[0]].x0)) / 2);
+        g_list.clear(); g_skip.clear();
+        for (size_t k = 0; k < v.size(); k++) {
+            const Spr &a = g_snap[v[k]];
+            Bar b{}; b.x0 = a.x0 - half; b.x1 = a.x1 + half; b.y0 = a.y0 - 6; b.y1 = a.y1 + 6; b.sig = 0;
+            g_list.push_back(b);
+            g_skip.push_back((int)k != sel && (std::abs(a.v0 - g_snap[v[sel]].v0) > 1 || std::abs(a.v1 - g_snap[v[sel]].v1) > 1));
+        }
+        g_sel = sel;
+        return true;
+    }
+    return false;
 }
 
 void analyze() {
@@ -148,7 +213,22 @@ void analyze() {
     for (size_t i = 0; i < bars.size(); i++) grp[std::make_tuple(bars[i].x1 - bars[i].x0, bars[i].y1 - bars[i].y0, bars[i].x0)].push_back((int)i);
     const std::vector<int> *best = nullptr; size_t best_last = 0;
     for (auto &g : grp) { size_t l = 0; for (int i : g.second) l = std::max(l, bars[i].last); if (g.second.size() >= 2 && (!best || l > best_last)) { best = &g.second; best_last = l; } }
-    if (!best) { analyze_text(); g_skip.assign(g_list.size(), false); trace_list(); return; }
+    if (!best) {
+        if (analyze_icons()) { trace_list(); return; }
+        analyze_text(); g_skip.assign(g_list.size(), false);
+        /* janelinha de texto cujo realce pisca (ex.: confirmando 'Attack'): enquanto as mesmas linhas de texto continuarem no lugar, por ate
+         * 12 quadros, a lista continua valendo com a selecao desconhecida (um clique espera o realce voltar), em vez de o campo embaixo dela
+         * virar alvo do clique */
+        static std::vector<Bar> held; static int held_age;
+        if (!g_list.empty()) { held = g_list; held_age = 0; }
+        else if (!held.empty() && ++held_age <= 12) {
+            int lines = 0;
+            for (const Bar &b : held) for (const Run &r : g_runs) if (std::abs(r.x0 - (b.x0 + 6)) <= 4 && r.y0 >= b.y0 - 3 && r.y0 <= b.y1) { lines++; break; }
+            if (lines == (int)held.size()) { g_list = held; g_sel = -1; g_skip.assign(g_list.size(), false); }
+            else held.clear();
+        } else held.clear();
+        trace_list(); return;
+    }
     for (int i : *best) g_list.push_back(bars[i]);
     std::sort(g_list.begin(), g_list.end(), [](const Bar &a, const Bar &b) { return a.y0 < b.y0; });
     /* selecionada: (1) lista de 3+ com so duas assinaturas e uma barra isolada = ela (e as outras sao o estilo 'normal'); (2) uma assinatura ja vista como
@@ -228,6 +308,7 @@ void dump_frame(uint32_t fb) {
     for (const Spr &a : g_snap) { n = fprintf(g_dump, "S %d %d %d %d %.1f %.1f %.1f %.1f %x %x\n", a.x0, a.y0, a.x1, a.y1, a.u0, a.v0, a.u1, a.v1, a.tex, a.col); g_dump_bytes += n > 0 ? n : 0; }
     for (const Run &a : g_runs) { n = fprintf(g_dump, "R %d %d %d %d\n", a.x0, a.y0, a.x1, a.y1); g_dump_bytes += n > 0 ? n : 0; }
     for (const Quad &a : g_quads) { n = fprintf(g_dump, "Q %d %d %d %d %x\n", a.x0, a.y0, a.x1, a.y1, a.tex); g_dump_bytes += n > 0 ? n : 0; }
+    { static uint64_t last_flush; if (g_dump_frame - last_flush >= 60) { last_flush = g_dump_frame; fflush(g_dump); } }   /* grava no disco ~1x/s: nada se perde se o jogo fechar sem o 2o F4 */
     if (g_dump_bytes > kDumpMax) { fprintf(g_dump, "# limite de tamanho: gravacao parada\n"); fclose(g_dump); g_dump = nullptr; g_dump_on = false; }
 }
 }
@@ -244,7 +325,8 @@ bool mui_dump_toggle(void) {
 #endif
         if (!g_dump) return false;
         fprintf(g_dump, "# Tag Force Recomp: gravacao do mouse. F = quadro exibido; S = sprite 2D (x0 y0 x1 y1 u0 v0 u1 v1 textura cor);\n"
-                        "# R = linha de texto; Q = quad 3D texturizado (carta); B = botoes do PSP (hex) e mouse 480x272 a partir daquele quadro\n");
+                        "# R = linha de texto; Q = quad 3D texturizado (carta); B = botoes do PSP (hex) e mouse 480x272 a partir daquele quadro; M = mouse mudou de lugar;\n"
+                        "# U = estado do mouse nas cartas: modo(1 Deck Edit, 2 duelo) cartas cursor fileira_do_cursor pausado alvo_coluna alvo_fileira\n");
     }
     g_dump_on = !g_dump_on; g_dump_hash = 0; g_dump_lastb = ~0u;
     fprintf(g_dump, "# gravacao %s no quadro %llu\n", g_dump_on ? "LIGADA" : "desligada", (unsigned long long)g_dump_frame); fflush(g_dump);
@@ -293,7 +375,7 @@ void confirm_pulse(uint64_t frame, const char *why, int bar) {
  *    32x32) fica em cima dela, ~17 px a direita da borda da carta. Sem a maozinha o jogador nao esta escolhendo carta (animacao, vez do CPU).
  * Aqui o mouse so age no CLIQUE (passar o mouse nao mexe o cursor: nessas telas abrem janelinhas que tambem usam o direcional). */
 namespace {
-struct Item { int x0, y0, x1, y1, col, row; };
+struct Item { int x0, y0, x1, y1, col, row, ax = -999, ay = -999; bool zone = false; };   /* ax,ay = onde fica a maozinha quando o cursor esta nesta carta/zona */
 std::vector<Item> g_items;    /* cartas clicaveis do quadro exibido */
 int g_isel = -1;              /* carta onde o cursor do jogo esta (-1 = nao da para saber) */
 int g_imode;                  /* 0 = nada, 1 = grade do Deck Edit, 2 = mao do duelo */
@@ -375,7 +457,37 @@ void analyze_items() {
         bool dup = false; for (Item &b : it) if (std::abs(b.x0 - q.x0) <= 2 && std::abs(b.y0 - q.y0) <= 2) { dup = true; break; }
         if (!dup) it.push_back({q.x0, q.y0, q.x1, q.y1, 0, 0});
     }
-    if (it.size() < 2 && nhand < 2) return;
+    /* onde a maozinha fica em cada carta (medido): na mao, 17 px a direita da borda e em y=193; no campo, no meio da carta, ~2 px abaixo do topo */
+    for (size_t i = 0; i < it.size(); i++) {
+        if (i < nhand) { it[i].ax = it[i].x0 + 17; it[i].ay = 193; }
+        else { it[i].ax = (it[i].x0 + it[i].x1) / 2; it[i].ay = it[i].y0 + 2; }
+    }
+    /* Zonas VAZIAS do seu lado: o cursor do jogo passa por elas (para invocar, baixar, olhar), entao tambem sao alvos. Posicoes da maozinha
+     * medidas nas gravacoes (visao normal do campo): monstros em y=145, x 226/270/314/358/401 (passo ~44); magias/armadilhas em y=181,
+     * x 218/266/314/361/409 (passo ~47). As fileiras sao centradas em x=314. Uma zona com carta ja e a propria carta. */
+    if (nhand >= 1 || it.size() > nhand) {
+        static const int kMonX[5] = {226, 270, 314, 358, 401}, kStX[5] = {218, 266, 314, 361, 409};
+        auto zone = [&](int px, int py, int half, int y0, int y1) {
+            for (const Item &c : it) if (c.ax != -999 && std::abs(c.ax - px) <= 8 && std::abs(c.ay - py) <= 10) return;   /* ja tem carta ali */
+            Item z{px - half, y0, px + half, y1, 0, 0}; z.ax = px; z.ay = py; z.zone = true; it.push_back(z);
+        };
+        for (int k = 0; k < 5; k++) zone(kMonX[k], 145, 21, 141, 173);
+        for (int k = 0; k < 5; k++) zone(kStX[k], 181, 23, 174, 205);
+        /* lado do oponente (mais longe da camera, mais estreito): monstros em y=99, x 236/275/314/352/391 (passo ~39); magias/armadilhas em
+         * y=75, x 242/278/314/349/385 (passo ~36). O cursor passa por elas ao olhar o campo; ao escolher alvo de ataque so para nos monstros */
+        static const int kOppMonX[5] = {236, 275, 314, 352, 391}, kOppStX[5] = {242, 278, 314, 349, 385};
+        for (int k = 0; k < 5; k++) zone(kOppMonX[k], 99, 19, 99, 122);
+        for (int k = 0; k < 5; k++) zone(kOppStX[k], 75, 18, 73, 99);
+        /* pilhas: o SEU deck (canto direito; a maozinha comeca nele no inicio do seu turno, x=448 y=175) e a pilha do oponente (canto de
+         * cima a esquerda, x=208 y=61). Retangulos clicaveis em volta; o deck fica na fileira das magias/armadilhas, a direita delas */
+        auto pile = [&](int px, int py, int x0, int y0, int x1, int y1) {
+            for (const Item &c : it) if (c.ax != -999 && std::abs(c.ax - px) <= 8 && std::abs(c.ay - py) <= 10) return;
+            Item z{x0, y0, x1, y1, 0, 0}; z.ax = px; z.ay = py; z.zone = true; it.push_back(z);
+        };
+        pile(448, 175, 434, 162, 480, 206);
+        pile(208, 61, 186, 40, 232, 72);
+    }
+    if (it.size() < 2) return;
     /* fileiras do campo: y parecido = mesma fileira (de cima para baixo); a mao e a ultima */
     {
         std::vector<int> ys; std::vector<size_t> fi;
@@ -388,9 +500,9 @@ void analyze_items() {
     for (const Spr &a : g_snap) {
         if (a.x1 - a.x0 != 32 || a.y1 - a.y0 != 32) continue;
         for (size_t i = 0; i < it.size(); i++) {
-            const int dx = a.x0 - it[i].x0, dy = a.y0 - it[i].y0;
-            if (dx < 8 || dx > 24 || dy < -18 || dy > 10) continue;
-            const int d = std::abs(dx - 16) + std::abs(dy + 4);
+            const int dx = a.x0 - it[i].ax, dy = a.y0 - it[i].ay;
+            if (std::abs(dx) > 6 || dy < -10 || dy > (it[i].row == 1000 ? 14 : 10)) continue;   /* na mao a maozinha desce ~12 px enquanto a carta sobe */
+            const int d = std::abs(dx) + std::abs(dy);
             if (d < best) { best = d; cur = (int)i; }
         }
     }
@@ -403,46 +515,84 @@ void analyze_items() {
 
 int g_istab_sel = -2, g_istab_n, g_burst_from = -1;
 int g_burst_axis, g_blocked_axis;   /* 1 = horizontal, 2 = vertical: eixo da ultima rajada / eixo em que o cursor nao andou */
-uint32_t update_items(uint64_t frame, bool inside, int mx, int my, bool l_edge, uint32_t user_dpad, bool *eat_cross, uint32_t out) {
+/* Passar o mouse pelas cartas do duelo leva o cursor do jogo junto (como no direcional). Fica PAUSADO enquanto uma janelinha pode estar
+ * aberta (Invocar/Baixar, escolher zona...), porque ela tambem usa o direcional: pausa quando o jogador confirma (X, do mouse ou do teclado)
+ * ou quando o cursor nao anda; volta quando a maozinha muda de carta ou some e reaparece (janela fechou, vez passou), ou com O (cancelar). */
+bool g_hover_pause; int g_pause_sel = -2;
+std::vector<std::pair<int, int>> g_unreach;   /* cartas/zonas que o cursor nao alcancou desde a ultima vez que ele andou (ex.: zona vazia do oponente ao escolher alvo) */
+int g_unreach_sel = -2, g_burst_dist = -1;
+bool unreachable(const Item &a) { for (auto &u : g_unreach) if (u.first == a.ax && u.second == a.ay) return true; return false; }
+int item_dist(const Item &t, const Item &c) { return t.row != c.row ? 100 * std::abs((t.row == 1000 ? 9 : t.row) - (c.row == 1000 ? 9 : c.row)) + 50 : std::abs(t.col - c.col); }
+uint32_t update_items(uint64_t frame, bool inside, bool moved, int mx, int my, bool l_edge, uint32_t user_dpad, bool *eat_cross, uint32_t out) {
     if (g_isel != g_istab_sel) { g_istab_sel = g_isel; g_istab_n = 0; } else g_istab_n++;
     if (g_isel >= 0) g_sel_seen = frame;
+    if (g_hover_pause && g_isel != g_pause_sel && !g_pending) {   /* a maozinha mudou de lugar (ou sumiu e voltou) sem ser por nos */
+        if (g_isel >= 0) { g_hover_pause = false; if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: passar o mouse liberado de novo\n", (unsigned long long)frame); }
+        g_pause_sel = g_isel;
+    }
+    if (g_isel != g_unreach_sel) { g_unreach_sel = g_isel; g_unreach.clear(); }   /* o cursor andou: tenta de novo o que antes nao deu */
     int hover = -1;
     if (inside) for (size_t i = 0; i < g_items.size(); i++) if (mx >= g_items[i].x0 && mx < g_items[i].x1 && my >= g_items[i].y0 && my < g_items[i].y1) hover = (int)i;
     if (user_dpad) { g_tkx = g_tky = -1; g_pending = false; return out; }
     int tgt = -1; for (size_t i = 0; i < g_items.size(); i++) if (g_items[i].col == g_tkx && g_items[i].row == g_tky) tgt = (int)i;
-    if (l_edge && hover >= 0 && g_isel >= 0) {
+    if (l_edge && hover >= 0 && g_isel >= 0 && g_imode == 2 && unreachable(g_items[hover])) {
+        *eat_cross = true;   /* clique numa zona que o cursor nao alcanca agora (ex.: vazia, ao escolher alvo): nao faz nada (nao confirma a carta atual) */
+    } else if (l_edge && hover >= 0 && g_isel >= 0) {
         g_tkx = g_items[hover].col; g_tky = g_items[hover].row; g_taps = 0; trim_burst(frame);
-        tgt = hover; g_pending = true; g_pending_until = frame + 150; *eat_cross = true; g_blocked_axis = 0; g_burst_from = -1;
+        tgt = hover; g_pending = true; g_pending_until = frame + 150; *eat_cross = true; g_blocked_axis = 0; g_burst_from = -1; g_hover_pause = false;
         if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: clique na carta %d (coluna %d, linha %d); cursor na %d\n", (unsigned long long)frame, hover, g_tkx, g_tky, g_isel);
+    } else if (g_imode == 2 && !g_hover_pause && !g_pending && moved && hover >= 0 && hover != tgt && g_isel >= 0 && !unreachable(g_items[hover])) {
+        g_tkx = g_items[hover].col; g_tky = g_items[hover].row; g_taps = 0; trim_burst(frame); g_blocked_axis = 0; g_burst_from = -1;
+        tgt = hover;
     }
     if (g_pending && frame > g_pending_until) g_pending = false;
-    if (tgt < 0 || !g_pending) { g_tkx = g_tky = -1; g_pending = false; return out; }
+    if (tgt < 0) { g_tkx = g_tky = -1; g_pending = false; return out; }
     if (burst_running(frame)) return out;
     if (g_burst_n) { g_burst_end = g_burst_start + (uint64_t)g_burst_n * g_period; g_burst_n = 0; }
     if (frame < g_pulse_end + 2 || frame < g_next_tap) return out;
-    if (g_isel < 0) { if (frame - g_sel_seen >= 12) { g_pending = false; g_tkx = g_tky = -1; } return out; }   /* cursor sumiu (janela, animacao): desiste */
-    if (g_istab_n < 2 || frame < g_burst_end + kSettle) return out;
+    if (g_isel < 0) { if (!g_pending || frame - g_sel_seen >= 12) { g_pending = false; g_tkx = g_tky = -1; } return out; }   /* cursor sumiu (janela, animacao): desiste */
+    /* a maozinha/moldura responde ~4-5 quadros depois do aperto (medido nas gravacoes): espera menos que nas listas, cujo realce anima */
+    if (g_istab_n < 2 || frame < g_burst_end + 8) return out;
+    auto give_up = [&](const char *why) {
+        if (g_imode == 2 && tgt >= 0) {
+            g_unreach.push_back({g_items[tgt].ax, g_items[tgt].ay});   /* nao insiste nesta ate o cursor andar */
+            /* passando o mouse por uma CARTA e o cursor nao anda: alguma janelinha usa o direcional, pausa. Zona vazia que nao da para alcancar
+             * (escolhendo alvo de ataque o cursor so para nos monstros) so fica marcada, sem pausar o resto */
+            if (!g_pending && !g_items[tgt].zone) { g_hover_pause = true; g_pause_sel = g_isel; }
+        }
+        g_pending = false; g_tkx = g_tky = -1; g_blocked_axis = 0;
+        if (g_mtrace) fprintf(stderr, "[mouse] %s: desisti\n", why);
+    };
     if (g_burst_from >= 0) {
         /* a ultima rajada nao mexeu o cursor: ou aquele eixo esta bloqueado (linha incompleta no fim da grade: tenta o outro eixo), ou outra coisa
          * esta usando o direcional (janelinha aberta: os dois eixos falham, desiste sem confirmar nada) */
-        const bool moved = g_isel != g_burst_from; g_burst_from = -1;
-        if (moved) g_blocked_axis = 0;
+        const bool mv = g_isel != g_burst_from; g_burst_from = -1;
+        if (mv && g_imode == 2 && tgt != g_isel && g_burst_dist >= 0 && item_dist(g_items[tgt], g_items[g_isel]) >= g_burst_dist) {
+            give_up("o cursor andou mas nao chegou mais perto (o jogo pula esta zona)"); return out;
+        }
+        if (mv) g_blocked_axis = 0;
         else if (tgt != g_isel) {
-            if (g_blocked_axis && g_blocked_axis != g_burst_axis) { g_pending = false; g_tkx = g_tky = -1; g_blocked_axis = 0; if (g_mtrace) fprintf(stderr, "[mouse] o cursor nao andou: desisti\n"); return out; }
+            if (g_blocked_axis && g_blocked_axis != g_burst_axis) { give_up("o cursor nao andou"); return out; }
+            if (!g_pending && g_imode == 2) { give_up("o cursor nao andou (passando o mouse)"); return out; }
             g_blocked_axis = g_burst_axis;
         }
     }
-    if (tgt == g_isel) { confirm_pulse(frame, "carta", tgt); return g_pulse; }
-    if (g_taps >= 10) { g_pending = false; g_tkx = g_tky = -1; return out; }
+    if (tgt == g_isel) {
+        if (g_pending) { confirm_pulse(frame, "carta", tgt); return g_pulse; }
+        g_tkx = g_tky = -1; return out;   /* passando o mouse: chegou, nao confirma */
+    }
+    if (g_taps >= 10) { give_up("passos demais"); return out; }
     const Item &t = g_items[tgt], &c = g_items[g_isel];
     const int dx = t.col - c.col, dy = t.row - c.row;
     int axis = dx && g_blocked_axis != 1 ? 1 : dy && g_blocked_axis != 2 ? 2 : 0;
     if (g_imode == 2 && dy && g_blocked_axis != 2) axis = 2;   /* duelo: primeiro chega na fileira certa */
-    if (!axis) { g_pending = false; g_tkx = g_tky = -1; g_blocked_axis = 0; if (g_mtrace) fprintf(stderr, "[mouse] sem caminho ate a carta: desisti\n"); return out; }
-    if (axis == 1) { g_burst_dir = dx > 0 ? 0x20 : 0x80; g_burst_n = std::abs(dx); }
+    if (!axis) { give_up("sem caminho ate a carta"); return out; }
+    /* no campo do duelo, um passo por vez: conforme o momento o jogo para nas zonas vazias (olhando o campo) ou pula elas (escolhendo alvo de
+     * ataque), entao contar colunas pode passar do alvo. Na mao (sem buracos) vai de uma vez */
+    if (axis == 1) { g_burst_dir = dx > 0 ? 0x20 : 0x80; g_burst_n = (g_imode == 2 && c.row != 1000) ? 1 : std::abs(dx); }
     else { g_burst_dir = dy > 0 ? 0x40 : 0x10; g_burst_n = g_imode == 2 ? 1 : std::abs(dy); }   /* duelo: as fileiras tem buracos e o jogo escolhe a coluna ao trocar de fileira: um passo por vez */
-    g_burst_axis = axis; g_burst_start = frame; g_taps++; g_burst_from = g_isel;
-    if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: carta %d -> %d, rajada de %d (%02x)\n", (unsigned long long)frame, g_isel, tgt, g_burst_n, g_burst_dir);
+    g_burst_axis = axis; g_burst_start = frame; g_taps++; g_burst_from = g_isel; g_burst_dist = item_dist(t, c);
+    if (g_mtrace) fprintf(stderr, "[mouse] quadro %llu: carta %d -> %d, rajada de %d (%02x)%s\n", (unsigned long long)frame, g_isel, tgt, g_burst_n, g_burst_dir, g_pending ? "" : " (passando o mouse)");
     return out | g_burst_dir;
 }
 }
@@ -456,7 +606,7 @@ uint32_t mui_update(uint64_t frame, bool inside, int mx, int my, bool l_edge, bo
     uint32_t out = frame < g_pulse_end ? g_pulse : 0;
     if (burst_running(frame) && frame >= g_burst_start && (frame - g_burst_start) % (uint64_t)g_period < (uint64_t)g_period / 2) out |= g_burst_dir;
     if (g_list.empty()) {
-        if (!g_items.empty()) return update_items(frame, inside, mx, my, l_edge, user_dpad, eat_cross, out);
+        if (!g_items.empty()) return update_items(frame, inside, moved, mx, my, l_edge, user_dpad, eat_cross, out);
         g_tkx = g_tky = -1; g_pending = false; return out;
     }
     stab_update();
@@ -516,8 +666,13 @@ const int kMinHold = 3;   /* o jogo le o controle a cada 2 quadros: um clique ma
 bool g_mprev[MUI_NB]; uint64_t g_mhold_until[MUI_NB]; bool g_owned;
 }
 
-uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_dpad) {
-    g_dump_mx = m.inside ? m.mx : -1; g_dump_my = m.inside ? m.my : -1;
+uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_buttons) {
+    const uint32_t user_dpad = user_buttons & 0xf0;
+    {   /* gravacao F4: posicao do mouse a cada mudanca (para estudar o 'passar o mouse') */
+        const int nx = m.inside ? m.mx : -1, ny = m.inside ? m.my : -1;
+        if (g_dump_on && g_dump && (nx != g_dump_mx || ny != g_dump_my)) { int n = fprintf(g_dump, "M %llu %d %d\n", (unsigned long long)frame, nx, ny); g_dump_bytes += n > 0 ? n : 0; }
+        g_dump_mx = nx; g_dump_my = ny;
+    }
     bool down[MUI_NB], edge[MUI_NB];
     for (int i = 0; i < MUI_NB; i++) {
         const bool raw = m.in_client && m.down[i];
@@ -537,5 +692,15 @@ uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_
     } else if (edge[MUI_BL]) g_owned = false;
     if (!down[MUI_BL]) g_owned = false;
     for (int i = 0; i < MUI_NB; i++) if (down[i] && !(i == MUI_BL && g_owned)) b |= kMouseBit[i];
+    /* cartas do duelo: confirmar (X) pode abrir uma janelinha -> pausa o 'passar o mouse'; cancelar (O) fecha -> libera */
+    static uint32_t prev_all;
+    const uint32_t all = b | user_buttons, rise = all & ~prev_all; prev_all = all;
+    if (rise & 0x4000) { g_hover_pause = true; g_pause_sel = g_isel; }
+    if (rise & 0x2000) g_hover_pause = false;
+    if (g_dump_on && g_dump) {   /* gravacao F4: o que o modulo enxergou e decidiu (cartas, cursor, pausa, alvo), a cada mudanca */
+        static std::string last;
+        char st[160]; snprintf(st, sizeof st, "%d %zu %d %d %d %d %d", g_imode, g_items.size(), g_isel, g_isel >= 0 ? g_items[g_isel].row : -1, (int)g_hover_pause, g_tkx, g_tky);
+        if (last != st) { last = st; int n = fprintf(g_dump, "U %llu %s\n", (unsigned long long)frame, st); g_dump_bytes += n > 0 ? n : 0; }
+    }
     return b;
 }

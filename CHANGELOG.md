@@ -17,6 +17,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - Mouse in menus: greyed-out items (e.g. Free Duel / Network Mode in the main menu early in the game) are skipped by the game's d-pad;
   the module counted them as steps, overshot the target and the highlight kept jumping up and down. Greyed-out bars are now recognised
   (by their style, and by learning which styles have ever been selected), not counted and not targeted; a click on one does nothing.
+- Duel: the small options window that opens over the cards (Activate / Attack / ...) is now recognised as a menu (its text lines
+  overlap: step 15 for 17 px of text, so it was missed). Clicking an option used to be taken as a click on the Spell/Trap zone
+  under the window, and the module pressed the d-pad, moving the window's selection. Now hovering highlights the option and
+  clicking confirms that option. Tight lines only count as a menu when a highlight bar marks exactly one of them.
+- Duel: your **deck** (the pointer starts on it at the beginning of your turn, x=448 y=175) and the opponent's pile (x=208 y=61) are
+  known places: the mouse was stuck at the start of every turn until a key moved the cursor off the deck.
+- Duel: the 2-option **Attack** box (over the opponent's monster row) is recognised as a menu too (2 lines count when a highlight marks
+  one of them); clicking "Attack" used to be taken as a click on the opponent's zone under it. A text menu whose highlight blinks
+  (confirming) stays a menu for up to 12 frames while its lines are still on screen.
+- Duel **phase selection** (Draw ... End): recognised as a horizontal menu (six 20x32 icons, step 40, with a 9-piece highlight
+  frame). Hovering highlights a phase and clicking selects it; unavailable phases (drawn from another part of the texture) are
+  skipped like the game does and are not targets.
 - Very short clicks (shorter than the game's 2-frame input poll) are no longer lost: the window records every button-down and each
   click stays pressed for at least 3 frames.
 - The click that only brings the window to the front is no longer sent to the game.
@@ -31,10 +43,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - Mouse in menus now also works on **cards**: in Deck Edit (the grid of card thumbnails) and in a **duel** (your hand, your monsters
   and Spell/Trap cards, the opponent's monsters, e.g. as attack targets), clicking a card moves the game's cursor there and selects it. Measured from F4 recordings: thumbnails 22x30 in a 28x34 grid with a 9-piece frame
   cursor; hand and field cards are 3D quads drawn twice (shared frame texture + art) with a 32x32 pointer on the chosen one; on the field the
-  cursor changes row one step at a time (rows have gaps). Only clicks act there (hovering does not move the cursor,
-  because small windows on those screens also use the d-pad); if the cursor does not move (a window is open) nothing is confirmed.
-- **F4**: records what the game draws on each frame (2D sprites, text lines, 3D card quads) plus the buttons and the mouse, to
-  `logs/<session>_mouse.txt`, to develop mouse support for screens that are not lists (Deck Edit, duel).
+  cursor changes row one step at a time (rows have gaps). In Deck Edit only clicks act (hovering does not move the cursor); if the cursor does not move (a window is open) nothing is confirmed.
+- In a duel, **hovering** a card moves the game's cursor to it (like the d-pad), with the game's sounds. Hovering pauses itself while a
+  small window may be open (after confirming with X, or when the cursor does not move) and comes back when the pointer moves or
+  reappears, or with O.
+- Duel field: your **empty** Monster and Spell/Trap zones are targets too (hover or click), so the cursor follows the mouse over the
+  whole field, not only over cards. Pointer positions measured from F4 recordings (monster zones y=145, x 226-401 step ~44;
+  Spell/Trap zones y=181, x 218-409 step ~47, both centred on x=314). The F4 recording is flushed to disk every second.
+- Duel field: the opponent's Monster zones (y=99, x 236-391 step ~39) and Spell/Trap zones (y=75, x 242-385 step ~36) are targets
+  too, empty or not. On the field the cursor moves one step at a time and checks it got closer: when choosing an attack target the
+  game skips empty zones, so a zone it cannot reach is marked and skipped (without pausing the rest) until the cursor moves.
+- **F4**: records what the game draws on each frame (2D sprites, text lines, 3D card quads) plus the buttons, every mouse movement
+  (M) and what the mouse module understood (U), to `logs/<session>_mouse.txt`, to develop mouse support for screens that are not lists (Deck Edit, duel).
 - `tools/teste_mouse/`: offline simulator and randomized test for the mouse module (no game or Windows needed).
 
 ## [0.3.0] - 2026-10-18

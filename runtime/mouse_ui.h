@@ -23,7 +23,7 @@ uint32_t mui_update(uint64_t frame, bool inside, int mx, int my, bool l_edge, bo
  * tomado pelo mouse nos menus nunca vira X por conta propria (nem depois que a tela troca, com o botao ainda apertado). */
 enum { MUI_BL, MUI_BR, MUI_BM, MUI_BX1, MUI_BX2, MUI_NB };
 struct MuiMouse { bool in_client, inside; int mx, my; bool down[MUI_NB], clicked[MUI_NB]; };
-uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_dpad);
+uint32_t mui_mouse(uint64_t frame, const MuiMouse &m, bool menus, uint32_t user_buttons);   /* user_buttons = botoes do teclado/controle deste quadro */
 
 /* Gravacao para desenvolver o mouse em telas que nao sao listas (Deck Edit, duelo): F4 liga/desliga. Grava, por quadro exibido, os sprites 2D,
  * as linhas de texto e os quads 3D texturizados (cartas), mais os botoes e o mouse, em logs/<sessao>_mouse.txt. */
