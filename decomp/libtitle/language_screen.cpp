@@ -3,7 +3,7 @@
 
 /* ---- the card database language screen (five rows, one per language) ---- */
 
-constexpr uint32_t kSelectedLanguage = 0x09B2C7A8;   /* byte: language chosen on this screen, 1..5 (0 = none yet) */
+constexpr uint32_t kSelectedLanguage = PORT(0x09B2C7A8);   /* byte: language chosen on this screen, 1..5 (0 = none yet) */
 /* kLogoIndexAddr (0x09B2C7A4) holds the language the card database is loaded for */
 
 /* FUN_08f0768c: enter the screen: build the five-row list (cursor on the language in use) and load the three background images */

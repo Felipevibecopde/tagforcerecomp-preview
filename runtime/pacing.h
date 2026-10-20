@@ -45,6 +45,8 @@ void pace_w2_sample(void);                          /* modo adiado: a chamada se
 bool pace_real_take(int *fb, int64_t *due, int64_t *work_start);
 void pace_gpu_done(void);                          /* a GPU acabou de terminar o intermediario (gpu_wait_kicked): a fase do intermediario cobre esse tempo */
 int64_t pace_step_ticks(void);                     /* um passo (1/60 s, ou k atualizacoes do monitor com sincronia) em QPC */
+void pace_set_speed(double s);                     /* velocidade do jogo: 1 = normal, 1.5 = 1,5x (passo = 1/(59,94 x s) s; sem sincronia com o monitor fora do 1x) */
+double pace_speed(void);
 int64_t pace_exit_target(void);                    /* hora marcada para a saida desta chamada (0 = sem limitador) */
 void pace_set_sub(int n);                          /* apresentacoes por passo: 1 (60 FPS) ou 2 (120 FPS); divide a correcao de fase */
 

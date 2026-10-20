@@ -9,7 +9,8 @@
  *
  * Game version: hook addresses are valid for ONE version of the game. By default a plugin is valid only for the European one
  * (ULES-00600); for another version, export `const char *tfmod_game_ids = "ULES-00600,ULUS-10136";` (the list of versions the
- * addresses are correct for).
+ * addresses are correct for). Since version 8, writing European addresses and passing them through api->port() makes a plugin work on
+ * every version that has a mods/enderecos_<ID>.txt table.
  * Rules: C only (stable ABI); the API only grows (new fields at the end, `version` goes up); a plugin built for version N runs on any
  * runtime with version >= N. Everything runs on the game thread, inside the frame: never block or wait. */
 #pragma once
@@ -20,7 +21,7 @@
 extern "C" {
 #endif
 
-#define TFMOD_API_VERSION 5   /* 2: guest_alloc; 3: add_slider; 4: add_toggle, panel, use_menu; 5: sprite, quad_near */
+#define TFMOD_API_VERSION 8   /* 2: guest_alloc; 3: add_slider; 4: add_toggle, panel, use_menu; 5: sprite, quad_near; 6: set_speed; 7: set_music_normal; 8: game_id, port */
 
 typedef struct CPU TfCpu;                     /* PSP registers (opaque: use reg/set_reg) */
 /* hook: called on ENTRY of the game function. Return 0 to let the original body run next (the hook only observed/prepared), or
@@ -104,6 +105,25 @@ typedef struct TfModApi {
     /* 1 if, in the frame on screen, the game drew a textured 3D quad (a card on the field etc.) whose center is within `tol` pixels of
      * (x, y) and whose width is wmin..wmax pixels. Used to tell whether a field slot is really visible (and not covered by a cut-in). */
     int (*quad_near)(int x, int y, int tol, int wmin, int wmax);
+
+    /* ---- version 6 ---- */
+    /* Game speed in percent (100 = normal, 150 = 1.5x; 25..400): the frame limiter releases frames that much faster (the game's own clock,
+     * animations and audio follow; audio is played faster too, higher-pitched). Can be called any time (e.g. from a slider's set()). */
+    void (*set_speed)(int percent);
+
+    /* ---- version 7 ---- */
+    /* With a speed other than 100: 1 = music and sound effects keep their normal speed and pitch (the game's sound threads wait the real
+     * duration of each block while the rest of the game runs faster); 0 = all audio plays faster too (higher-pitched). Default 1. */
+    void (*set_music_normal)(int on);
+
+    /* ---- version 8 ---- */
+    /* Version of the game running ("ULES-00600" European, "ULUS-10136" American). */
+    const char *game_id;
+    /* Translates an address of the EUROPEAN game (function or data, as written in the mod) to the version running: the same address on the
+     * European one; on another version, the equivalent from mods/enderecos_<ID>.txt (made by tools/portar_mods.py); 0 when that version has
+     * no equivalent (hook(0), call(0) and mem(below 0x08000000) are safe: nothing happens). A data address a few bytes after a ported one
+     * (struct field, table entry) follows the same shift. Write mods with European addresses and pass them through port(). */
+    uint32_t (*port)(uint32_t eu_addr);
 } TfModApi;
 #define TFMOD_MENU_MODS 0
 #define TFMOD_MENU_CHEATS 1

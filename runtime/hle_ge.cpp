@@ -11,6 +11,7 @@
 #include "gpu.h"
 #include "pacing.h"
 extern "C" { extern uint32_t g_trace[1024]; extern uint32_t g_trace_i; }
+uint32_t port_eu(uint32_t a);   /* plugins.cpp: endereco europeu -> versao rodando (o mesmo na europeia) */
 #include "gfx.h"
 #include "imgio.h"
 #include "texrepl.h"
@@ -1588,8 +1589,15 @@ static void draw_prim(GeList &l, uint32_t data) {
     if (t.idx) G.iaddr += count * (t.idx == 1 ? 1 : t.idx == 2 ? 2 : 4); else G.vaddr += count * vs;
     /* icone de carregamento (Ojama + disco, texturas loading000x embutidas no BOOT): no PSP indicava leitura do UMD, que
      * nao existe aqui; nao e desenhado (TF_LOADING_ICON=1 mantem) */
-    { static const bool keep = getenv("TF_LOADING_ICON") != nullptr || game_id_built() != "ULES-00600";   /* enderecos do BOOT europeu */
-      if (textured && !keep) { uint32_t ta = tex_addr(); if (ta >= 0x088ad000 && ta < 0x088b3800) return; } }
+    {   /* enderecos do BOOT europeu; em outra versao, os equivalentes da tabela de enderecos (tools/portar_mods.py), se houver */
+        static uint32_t lo = 0, hi = 0; static bool init = false, keep = false;
+        if (!init) {
+            init = true; keep = getenv("TF_LOADING_ICON") != nullptr;
+            lo = port_eu(0x088ad000); hi = port_eu(0x088b3800);
+            if (!lo || !hi || hi <= lo) keep = true;   /* sem equivalente: o icone fica (como antes) */
+        }
+        if (textured && !keep) { uint32_t ta = tex_addr(); if (ta >= lo && ta < hi) return; }
+    }
     bool flat = CMD(0x50) == 0;
     g_cull = (!t.through && (CMD(0x1d) & 1)) ? ((CMD(0x9b) & 1) ? 2 : 1) : 0;
     setup_state(textured);

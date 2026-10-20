@@ -1,0 +1,4 @@
+name=HD Textures
+author=(texture pack author)
+version=1.0
+description=Slot for a high-resolution texture pack (PPSSPP format). Download the pack, extract it into the "textures" folder of this mod and it is used automatically (Direct3D 11 or Vulkan renderer). See LEIA-ME.txt.

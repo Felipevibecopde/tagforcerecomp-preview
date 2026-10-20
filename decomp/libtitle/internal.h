@@ -16,12 +16,13 @@
 bool display_confirm(const wchar_t *text);   /* runtime/display.cpp: Yes/No box, the game waits while it is open */
 void display_quit(void);                     /* runtime/display.cpp: log, pending recordings, then ExitProcess */
 
+#include "../port.h"
 #define MODULE "libtitle"
 using namespace libtitle;
 namespace nid = ehsys::nid;
 
-constexpr uint32_t kBase = 0x08efca00;
-constexpr uint32_t off(uint32_t addr) { return addr - kBase; }
+constexpr uint32_t kBase = 0x08efca00;   /* base do modulo: a mesma nas duas versoes (tools/modules*.tsv); NAO passa por PORT */
+constexpr uint32_t off(uint32_t addr) { return PORT(addr) - kBase; }   /* PORT: endereco europeu -> versao deste executavel (decomp/port.h) */
 
 /* The game functions this module calls, by address. Each one is a Swap below (callLocal(fn::X, ...) runs the same code as the hook). */
 namespace fn {
@@ -313,8 +314,8 @@ inline uint32_t currentArchive(SwapCtx &x) { return x.at<uint32_t>(kLogoTableAdd
 inline const LogoSprite &logoSprite(SwapCtx &x, uint32_t i) { return x.at<LogoSprite>(x.addr(off(kLogoSprites)) + i * sizeof(LogoSprite)); }
 inline uint32_t logoSpriteName(SwapCtx &x, uint32_t i) { return x.addr(off(kLogoSprites)) + i * sizeof(LogoSprite) + offsetof(LogoSprite, fileName); }
 
-constexpr uint32_t kReadyAddr = 0x09B2CBF4;                /* s16 */
-constexpr uint32_t kCharAlbumReadyAddr = 0x09B2C7A9;       /* byte: the character list/recipe viewer is up */
+constexpr uint32_t kReadyAddr = PORT(0x09B2CBF4);                /* s16 */
+constexpr uint32_t kCharAlbumReadyAddr = PORT(0x09B2C7A9);       /* byte: the character list/recipe viewer is up */
 
 /* The save's record of one card (18 bytes, GetProgressRecord): how far the card is collected. */
 struct ProgressRecord {

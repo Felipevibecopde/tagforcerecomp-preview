@@ -36,11 +36,11 @@ struct OptionsScreen {
     uint32_t colourSelected;    /* +44 */
 };
 static_assert(sizeof(OptionsScreen) == 48 && offsetof(OptionsScreen, heap) == 20 && offsetof(OptionsScreen, blink) == 36, "OptionsScreen layout");
-constexpr uint32_t kOptionsScreenPtr = 0x09B2CD78;
-constexpr uint32_t kOptionsSprites = 0x08f27588;     /* 27 rectangles u, v, w, h (4 int16 each) of the screen's sprite sheets */
-constexpr uint32_t kOptionsRowCounts = 0x08f27674;   /* int16 per group: rows in the group */
-constexpr uint32_t kOptionsRowIcons = 0x08f27670;    /* byte per group: row of the strip sprites */
-constexpr uint32_t kOptionsGroupIcons = 0x08f27660;  /* word per group: icon cell of the group's frame */
+constexpr uint32_t kOptionsScreenPtr = PORT(0x09B2CD78);
+constexpr uint32_t kOptionsSprites = PORT(0x08f27588);     /* 27 rectangles u, v, w, h (4 int16 each) of the screen's sprite sheets */
+constexpr uint32_t kOptionsRowCounts = PORT(0x08f27674);   /* int16 per group: rows in the group */
+constexpr uint32_t kOptionsRowIcons = PORT(0x08f27670);    /* byte per group: row of the strip sprites */
+constexpr uint32_t kOptionsGroupIcons = PORT(0x08f27660);  /* word per group: icon cell of the group's frame */
 constexpr uint32_t kPadLeft = 0x80, kPadUp = 0x10, kPadRight = 0x20, kPadDown = 0x40;
 
 static OptionsScreen &options(SwapCtx &x) { return x.at<OptionsScreen>(x.at<uint32_t>(kOptionsScreenPtr)); }
@@ -558,7 +558,7 @@ static uint32_t drawOptionsScreen(SwapCtx &x, uint32_t list) {
         rows[2] = 3;
         if (o.cursor > 2) cursor = (uint32_t)(o.cursor - 1) & 0xFF;
     }
-    const uint32_t names = x.addr(off(o.mode == 1 ? 0x08f27508 : 0x08f27488));
+    const uint32_t names = x.addr(off(o.mode == 1 ? PORT(0x08f27508) : PORT(0x08f27488)));
     o.panelTexture = ehsys::FindTexture(x, o.archive, names, 0);
     o.stripTexture = ehsys::FindTexture(x, o.archive, names + 0x40, 0);
 

@@ -17,8 +17,11 @@
 #include <string.h>
 #include <stdlib.h>
 
+extern "C" { __declspec(dllexport) const char *tfmod_game_ids = "ULES-00600,ULUS-10136"; }   /* enderecos traduzidos por port() */
 static const TfModApi *A;
-static const uint32_t F_LER_DECK = 0x0884a694;
+/* enderecos: escritos como no jogo europeu e traduzidos para a versao rodando (API 8: port; tools/portar_mods.py) */
+static uint32_t P(uint32_t a) { return A && A->version >= 8 ? A->port(a) : a; }
+static uint32_t F_LER_DECK = 0x0884a694;
 struct Deck { std::vector<uint16_t> principal, extra, side; };
 static std::map<int, Deck> g_decks;
 static bool g_off;
@@ -66,7 +69,7 @@ static int hk_ler_deck(TfCpu *c) {   /* libehsys_85A292D7(indice, saida) */
 }
 
 extern "C" __declspec(dllexport) int tfmod_init(const TfModApi *api) {
-    A = api; g_off = getenv("TF_DECKS_OFF") != nullptr;
+    A = api; F_LER_DECK = P(F_LER_DECK); g_off = getenv("TF_DECKS_OFF") != nullptr;
     carregar();
     A->hook(F_LER_DECK, hk_ler_deck);
     A->log("Decks Aprimorados: %zu deck(s) editado(s)%s", g_decks.size(), g_off ? " (DESLIGADO por TF_DECKS_OFF)" : "");

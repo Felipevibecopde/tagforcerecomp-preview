@@ -160,8 +160,16 @@ static void paint_frame(HDC dc) {   /* imagem 480x272 na janela: filtro/proporca
 }
 static void quit_process(void);
 static void toggle_fps_overlay(void);
+void k_dump_threads(void);
+extern "C" { extern uint32_t g_trace[1024]; extern uint32_t g_trace_i; }
 static void mouse_dump_toggle(void) {   /* F4: gravacao para desenvolver o mouse no Deck Edit / duelo (mouse_ui.cpp) */
     const bool on = mui_dump_toggle();
+    if (!on) {   /* ao parar: o estado das threads do jogo vai para o log da sessao (o que cada uma espera: semaforo, evento, vblank...) e as
+                  * ultimas funcoes recompiladas; serve para investigar telas que param de responder mas continuam animando */
+        fprintf(stderr, "\n[F4] estado do jogo ao parar a gravacao (quadro %llu). Ultimas funcoes:\n", (unsigned long long)g_frames);
+        for (uint32_t i = 0; i < 64; i++) fprintf(stderr, " %08x%s", g_trace[(g_trace_i - 64 + i) & 1023], (i % 16) == 15 ? "\n" : "");
+        k_dump_threads();
+    }
     display_notify(on ? "Mouse recording ON (F4 again to stop)" : "Mouse recording OFF: file saved in logs");
 }
 static bool g_pending_pack;   /* F5: pedido de troca Original <-> Enhanced; aplicado em display_present, entre dois quadros */

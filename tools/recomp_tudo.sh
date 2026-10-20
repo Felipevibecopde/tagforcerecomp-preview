@@ -32,6 +32,7 @@ echo "== 2/4 tabela de NIDs"
 python tools/gerar_nids.py
 echo "== 3/4 traduzindo os modulos (Allegrex -> C)"
 [ -n "$GHIDRA" ] && export TF_USAR_GHIDRA=1
+mkdir -p "$GV"   # gen/<versao>/ (outra versao do jogo) ainda nao existe na 1a vez
 python tools/build_modules.py > $GV/recomp_modulos.log 2>&1 || { tail -20 $GV/recomp_modulos.log; exit 1; }
 tail -1 $GV/recomp_modulos.log
 echo "== 4/4 icone e compilacao"

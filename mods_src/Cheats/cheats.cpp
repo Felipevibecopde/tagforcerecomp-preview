@@ -37,8 +37,11 @@
 #include <stdlib.h>
 #include <wchar.h>
 
+extern "C" { __declspec(dllexport) const char *tfmod_game_ids = "ULES-00600,ULUS-10136"; }   /* enderecos traduzidos por port() */
 static const TfModApi *A;
-static const uint32_t F_QUADRO = 0x08833fc4;
+/* enderecos: escritos como no jogo europeu e traduzidos para a versao rodando (API 8: port; tools/portar_mods.py) */
+static uint32_t P(uint32_t a) { return A && A->version >= 8 ? A->port(a) : a; }
+static uint32_t F_QUADRO = 0x08833fc4;
 static uint32_t &u32(uint32_t a) { return *(uint32_t *)A->mem(a); }
 static int32_t &i32(uint32_t a) { return *(int32_t *)A->mem(a); }
 static uint16_t u16(uint32_t a) { return *(uint16_t *)A->mem(a); }
@@ -86,8 +89,8 @@ static void cfg_load(void) {
 }
 
 /* ------------------------------------------------------------------ 1. see the opponent's cards */
-static const uint32_t JOG = 0x09f79cec, PASSO = 0xfac, CASAS = 0x09f79d1c;
-static const uint32_t F_NOME = 0x0884b46c, F_PROP = 0x0884b4f8;
+static uint32_t JOG = 0x09f79cec, PASSO = 0xfac, CASAS = 0x09f79d1c;
+static uint32_t F_NOME = 0x0884b46c, F_PROP = 0x0884b4f8;
 /* F_PROP: id -> endereco dos 8 bytes da carta em CARD_Prop (layout em tools/cartas.py): w0 bits 13-21 ATK/10 e 22-30 DEF/10 (0x1ff = "?");
  * w1 bits 0-3 categoria (0 normal, 1 efeito, 2/3 fusao, 4/5 ritual, 6-8 toon/espirito/uniao, 9 ficha, 13 magia, 14 armadilha),
  * 4-7 atributo (1 luz, 2 trevas, 3 agua, 4 fogo, 5 terra, 6 vento, 8 magia, 9 armadilha), 8-11 nivel, 12-14 icone de magia/armadilha */
@@ -149,7 +152,7 @@ static void ver_cartas_quadro(TfCpu *c) {
     if (!g_ver || !A->module_loaded("libduel_eng")) return;
     const int32_t lp0 = i32(JOG), lp1 = i32(JOG + PASSO);
     if (lp0 <= 0 && lp1 <= 0) return;   /* fora de um duelo em andamento */
-    const bool cpu0 = u32(0x09f77888) == 1, cpu1 = u32(0x09f77888 + 4) == 1;
+    const bool cpu0 = u32(P(0x09f77888)) == 1, cpu1 = u32(P(0x09f77888) + 4) == 1;
     if (cpu0 && cpu1) { painel_lado(c, 0, (g_canto & 1) ? g_canto - 1 : g_canto, L"CPU 1"); painel_lado(c, 1, g_canto | 1, L"CPU 2"); }   /* CPU contra CPU: os dois lados */
     else if (cpu1) painel_lado(c, 1, g_canto, L"Opponent");
     else if (cpu0) painel_lado(c, 0, g_canto, L"Opponent");
@@ -160,7 +163,7 @@ static int canto_get(void) { return g_canto; }
 static void canto_set(int v) { g_canto = std::max(0, std::min(3, v)); cfg_save(); }
 
 /* ------------------------------------------------------------------ 2. DP multiplier */
-static const uint32_t F_RECOMPENSA = 0x08f08534, F_DP = 0x0883d908, F_DP_SOMAR = 0x0883d938, P_CTX = 0x09a151a4, F_NUMERO = 0x08f0d7f4;
+static uint32_t F_RECOMPENSA = 0x08f08534, F_DP = 0x0883d908, F_DP_SOMAR = 0x0883d938, P_CTX = 0x09a151a4, F_NUMERO = 0x08f0d7f4;
 static const uint32_t BTN_UP = 0x10, BTN_DOWN = 0x40, BTN_L = 0x100, BTN_R = 0x200;
 static uint64_t g_mult_show_until; static uint32_t g_prev_btn;
 static int mult_get(void) { return g_mult; }
@@ -184,9 +187,9 @@ static int hk_numero(TfCpu *c) {   /* linhas de DP das telas de detalhe do resul
     if (g_mult <= 1 || !A->module_loaded("libduel_mgr")) return 0;
     const uint32_t ra = A->reg(c, 31), v = A->reg(c, 7), t0 = A->reg(c, 8), dig = A->reg(c, 9);
     bool escala = false;
-    if (ra >= 0x08f0ba90 && ra < 0x08f0bd0c) escala = true;                                                   /* FUN_08f0ba90: linhas da tabela de bonus (valor variavel) */
-    else if (ra >= 0x08f0c50c && ra < 0x08f0c764) escala = v == 0x1e;                                         /* FUN_08f0c50c: 30 DP por item */
-    else if (ra >= 0x08f0bf20 && ra < 0x08f0c350) escala = v == 0x14 && t0 == 9 && dig == 3;                  /* FUN_08f0bf20: 20 DP por item (as outras chamadas dela mostram contagens) */
+    if (ra >= P(0x08f0ba90) && ra < P(0x08f0bd0c)) escala = true;                                                   /* FUN_08f0ba90: linhas da tabela de bonus (valor variavel) */
+    else if (ra >= P(0x08f0c50c) && ra < P(0x08f0c764)) escala = v == 0x1e;                                         /* FUN_08f0c50c: 30 DP por item */
+    else if (ra >= P(0x08f0bf20) && ra < P(0x08f0c350)) escala = v == 0x14 && t0 == 9 && dig == 3;                  /* FUN_08f0bf20: 20 DP por item (as outras chamadas dela mostram contagens) */
     if (!escala) return 0;
     const uint32_t novo = std::min<uint32_t>(9999, v * (uint32_t)g_mult), preciso = novo > 999 ? 4 : novo > 99 ? 3 : 2;
     A->set_reg(c, 7, novo); A->set_reg(c, 9, std::max(dig, preciso));
@@ -211,7 +214,7 @@ static void mult_quadro(void) {   /* L + R + CIMA/BAIXO em qualquer tela */
 }
 
 /* ------------------------------------------------------------------ 3. Unlock everything */
-static const uint32_t SAVE = 0x08a65418, SAVE_VERSION = 0x10002, F_COLECAO_ENTRADA = 0x0883de3c;
+static uint32_t SAVE = 0x08a65418, SAVE_VERSION = 0x10002, F_COLECAO_ENTRADA = 0x0883de3c;
 static const uint32_t SAVE_DUELIST_RECORDS = 0x68, DUELIST_RECORD_SIZE = 0x12, DUELIST_RECORD_DECKS = 6;
 static const uint32_t SAVE_PACKS = 0x8ff4, PACK_SIZE = 0x2a, PACK_COUNT = 0x30, PACK_AVAILABLE = 2;
 static const uint32_t CARD_ID_LAST = 0x2000, CARD_COPIES = 3, CARD_STATUS_SEEN = 2;
@@ -281,7 +284,7 @@ static void unlock_quadro(TfCpu *c) {
 static int hk_quadro(TfCpu *c) { mult_quadro(); ver_cartas_quadro(c); unlock_quadro(c); return 0; }
 
 extern "C" __declspec(dllexport) int tfmod_init(const TfModApi *api) {
-    A = api;
+    A = api; F_QUADRO = P(F_QUADRO); JOG = P(JOG); CASAS = P(CASAS); F_NOME = P(F_NOME); F_PROP = P(F_PROP); F_RECOMPENSA = P(F_RECOMPENSA); F_DP = P(F_DP); F_DP_SOMAR = P(F_DP_SOMAR); P_CTX = P(P_CTX); F_NUMERO = P(F_NUMERO); SAVE = P(SAVE); F_COLECAO_ENTRADA = P(F_COLECAO_ENTRADA);
     if (A->version < 4) { A->log("Cheats precisa da API 4 (runtime mais novo)"); return 1; }
     cfg_load();
     A->use_menu(TFMOD_MENU_CHEATS);   /* everything in this mod goes in the bar's Cheats menu (separate from the mods) */

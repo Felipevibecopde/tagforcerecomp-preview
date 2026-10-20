@@ -10,6 +10,9 @@
 #include "gameid.h"
 #include "../mods_sdk/tfmod.h"
 #include <windows.h>
+#include <map>
+#include <string>
+#include <cstring>
 #include <algorithm>
 #include <stdarg.h>
 #include <stdio.h>
@@ -20,6 +23,11 @@
 uint32_t display_buttons(void);
 uint64_t display_frames(void);
 bool host_module_loaded(const char *name);
+
+/* velocidade do jogo (API v6): definidas em pacing.cpp e audio_out.cpp, fora de qualquer namespace */
+void pace_set_speed(double s);
+void audio_out_set_speed(double s);
+void audio_out_set_music_normal(bool on);
 
 namespace {
 struct Plugin { std::string name; std::wstring dir; HMODULE dll; TfModApi api; int menu = 0; };   /* menu: onde entram os proximos ajustes (use_menu) */
@@ -53,13 +61,63 @@ void api_panel(int corner, const wchar_t *title, const wchar_t *const *lines, in
 }
 void api_sprite(int id, const uint32_t *rgba, int w, int h, float x, float y, float dw, float dh, int alpha) { modbox_sprite(display_frames(), id, rgba, w, h, x, y, dw, dh, alpha); }
 int api_quad_near(int x, int y, int tol, int wmin, int wmax) { return modbox_quad_near(x, y, tol, wmin, wmax); }
+void api_set_speed(int percent) {   /* versao 6: velocidade do jogo (limitador + audio) */
+    const int p = percent < 25 ? 25 : percent > 400 ? 400 : percent;
+    pace_set_speed(p / 100.0); audio_out_set_speed(p / 100.0);
+    fprintf(stderr, "[mods] velocidade do jogo: %d%%\n", p);
+}
+/* versao 8: enderecos europeus -> versao rodando (tabela mods/enderecos_<ID>.txt feita por tools/portar_mods.py) */
+std::map<uint32_t, std::pair<uint32_t, bool>> g_port;   /* europeu -> (equivalente, e dado) */
+bool g_port_eu = true; std::string g_game_id;
+void port_load(const std::wstring &mods_dir) {
+    g_game_id = game_id_built(); g_port_eu = g_game_id.empty() || g_game_id == "ULES-00600";
+    if (g_port_eu) return;
+    std::string cid; for (char ch : g_game_id) if (ch != '-') cid += ch;
+    wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH); std::wstring ed = exe; ed = ed.substr(0, ed.find_last_of(L"\\/"));
+    const std::wstring nome = L"enderecos_" + std::wstring(cid.begin(), cid.end()) + L".txt";
+    const std::wstring cands[] = {mods_dir + L"\\" + nome, ed + L"\\mods\\" + nome, ed + L"\\..\\tools\\" + nome};   /* pacote / pasta do jogo / projeto (gen/run.exe) */
+    for (const std::wstring &c : cands) {
+        FILE *f = _wfopen(c.c_str(), L"rb"); if (!f) continue;
+        char ln[512]; int n = 0;
+        while (fgets(ln, sizeof ln, f)) {
+            unsigned eu = 0, us = 0;
+            if (ln[0] == '#' || sscanf(ln, " 0x%x -> 0x%x", &eu, &us) != 2) continue;
+            g_port[eu] = {us, strstr(ln, "# dado") != nullptr}; n++;
+        }
+        fclose(f);
+        fprintf(stderr, "[mods] jogo %s: %d enderecos dos mods portados (%ls)\n", g_game_id.c_str(), n, c.c_str());
+        return;
+    }
+    fprintf(stderr, "[mods] jogo %s: sem tabela de enderecos (%ls); os mods que dependem de enderecos do jogo ficam sem efeito\n", g_game_id.c_str(), nome.c_str());
+}
+uint32_t api_port(uint32_t a) {
+    if (g_port_eu) return a;
+    auto it = g_port.upper_bound(a);
+    if (it == g_port.begin()) return 0;
+    --it;
+    if (it->first == a) return it->second.first;
+    if (it->second.second && a - it->first <= 0x2000) return it->second.first + (a - it->first);   /* campo de estrutura/tabela: mesmo deslocamento */
+    return 0;
+}
+void api_set_music_normal(int on) {   /* versao 7: musica/efeitos na velocidade normal com o jogo acelerado */
+    audio_out_set_music_normal(on != 0);
+    fprintf(stderr, "[mods] musica na velocidade normal: %s\n", on ? "sim" : "nao");
+}
 void api_use_menu(int m) { if (Plugin *p = current()) p->menu = m == TFMOD_MENU_CHEATS ? 1 : 0; }
-uint8_t *api_mem(uint32_t a) { return mem_ptr(a); }
+uint8_t *api_mem(uint32_t a) {   /* endereco que nao existe nesta versao do jogo (port devolveu 0): rascunho, nada quebra */
+    static uint8_t rascunho[0x20000];
+    if (a < 0x08000000u) return rascunho + (a & 0xffff);
+    return mem_ptr(a);
+}
 uint32_t api_reg(TfCpu *c, int i) { return i > 0 && i < 32 ? ((CPU *)c)->r[i] : 0; }
 void api_set_reg(TfCpu *c, int i, uint32_t v) { if (i > 0 && i < 32) ((CPU *)c)->r[i] = v; }
-void api_hook(uint32_t addr, TfHook fn) { Plugin *p = current(); if (fn && p) hook_install_c(addr, (int (*)(CPU *))fn, p); }
+void api_hook(uint32_t addr, TfHook fn) {
+    Plugin *p = current();
+    if (!addr) { if (p) fprintf(stderr, "[mods] %s: um gancho nao existe nesta versao do jogo (ignorado)\n", p->name.c_str()); return; }
+    if (fn && p) hook_install_c(addr, (int (*)(CPU *))fn, p);
+}
 int api_call_original(TfCpu *c, uint32_t addr) { return hook_call_original((CPU *)c, addr) ? 1 : 0; }
-void api_call(TfCpu *c, uint32_t addr) { psp_call((CPU *)c, addr); }
+void api_call(TfCpu *c, uint32_t addr) { if (!addr) { ((CPU *)c)->r[2] = 0; return; } psp_call((CPU *)c, addr); }   /* 0: funcao que nao existe nesta versao */
 uint32_t api_buttons(void) { return display_buttons(); }
 uint64_t api_frame(void) { return display_frames(); }
 int api_module_loaded(const char *n) { return n && host_module_loaded(n) ? 1 : 0; }
@@ -91,6 +149,11 @@ void plugins_marca(int n) {   /* tecla F7 / L3+R3: chama tfmod_marca(n) dos plug
 
 void plugins_load(void) {
     std::vector<std::pair<std::string, std::wstring>> mods; mods_plugin_dirs(mods);
+    {   /* tabela de enderecos da versao rodando: na pasta dos mods (a mae da pasta de cada mod) */
+        std::wstring md = L"mods";
+        if (!mods.empty()) { wchar_t full[MAX_PATH * 2]; if (GetFullPathNameW(mods[0].second.c_str(), MAX_PATH * 2, full, nullptr)) { md = full; md = md.substr(0, md.find_last_of(L"\\/")); } }
+        port_load(md);
+    }
     for (auto &m : mods) {
         wchar_t full[MAX_PATH * 2]; const std::wstring rel = m.second + L"\\plugin.dll";
         if (!GetFullPathNameW(rel.c_str(), MAX_PATH * 2, full, nullptr)) continue;   /* caminho absoluto: um relativo seria procurado a partir da pasta do .exe */
@@ -117,6 +180,9 @@ void plugins_load(void) {
         a.add_slider = api_add_slider;     /* versao 3 */
         a.add_toggle = api_add_toggle; a.panel = api_panel; a.use_menu = api_use_menu;   /* versao 4 */
         a.sprite = api_sprite; a.quad_near = api_quad_near;   /* versao 5 */
+        a.set_speed = api_set_speed;   /* versao 6 */
+        a.set_music_normal = api_set_music_normal;   /* versao 7 */
+        a.game_id = g_game_id.c_str(); a.port = api_port;   /* versao 8 */
         g_init = p; const int r = init(&a); g_init = nullptr;
         if (r != 0) {   /* falhou: tira os ganchos e os ajustes que ele tenha posto (as funcoes deles somem com a DLL: o menu chamaria get() de codigo descarregado) */
             hook_remove_owner(p);
@@ -170,4 +236,11 @@ bool plugin_slider_edit(HWND owner, int i) {
     if (!tf_slider(owner, title.c_str(), text.c_str(), s.unit.c_str(), s.vmin, s.vmax, s.def, &v)) return false;
     void *prev = g_hook_owner; g_hook_owner = s.p; s.set(v); g_hook_owner = prev;   /* durante o set, o log do plugin leva o nome dele */
     return true;
+}
+
+/* para o resto do programa (ex.: hle_ge: icone de carregamento): endereco europeu -> versao rodando; carrega a tabela se ainda nao */
+uint32_t port_eu(uint32_t a) {
+    static bool carregou = false;
+    if (!carregou) { carregou = true; if (g_port.empty() && g_game_id.empty()) port_load(L"mods"); }
+    return api_port(a);
 }

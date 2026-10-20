@@ -92,7 +92,7 @@ static SwapReg reg_PrepareMenuDraw({"libtitle.PrepareMenuDraw", MODULE, off(0x08
 
 /* ---- flow initialisation and the per-screen step functions ---- */
 namespace {
-constexpr uint32_t kHeapMemory = 0x08F29730;                                              /* 12 MB at the end of libtitle's image */
+constexpr uint32_t kHeapMemory = PORT(0x08F29730);                                              /* 12 MB at the end of libtitle's image */
 
 }  // namespace
 

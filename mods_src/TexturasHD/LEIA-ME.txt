@@ -1,0 +1,29 @@
+TEXTURAS HD - como instalar
+===========================
+
+Este mod vem VAZIO. Ele e o lugar para colocar um pacote de texturas em alta
+resolucao (formato do PPSSPP, o mesmo da maioria dos pacotes do Tag Force).
+
+1. Baixe o pacote de texturas no link oficial dele (veja a descricao da
+   versao no GitHub).
+2. Extraia o conteudo do pacote DENTRO da pasta "textures" que esta aqui ao
+   lado deste arquivo. O arquivo "textures.ini" precisa ficar DIRETO dentro
+   de "textures" (as imagens .png podem estar em subpastas). Se, ao extrair,
+   apareceu uma pasta a mais (ex.: textures\NomeDoPacote\textures.ini), mova
+   o conteudo dela um nivel para cima.
+3. Abra o jogo. Na aba Mods do launcher, deixe "HD Textures" ligado.
+   O renderizador precisa ser Direct3D 11 ou Vulkan (no Software as
+   texturas novas nao aparecem).
+
+Para conferir: depois de jogar um pouco, o relatorio da sessao (pasta logs,
+arquivo .log) mostra uma linha "[texturas] ...TexturasHD...: N substituicao(oes)".
+Se N for 0, o textures.ini nao esta no lugar certo.
+
+Pacotes da versao americana do jogo tambem servem: o jogo reconhece cada
+textura pelo conteudo da imagem, entao quase todas sao trocadas.
+
+Se o pacote ja estiver em outra pasta do computador, em vez de copiar, abra o
+mod.txt deste mod e acrescente uma linha no final:
+    textures=C:\caminho\da\pasta\do\pacote
+
+Os pacotes de textura pertencem aos seus autores: este mod nao inclui nenhum.

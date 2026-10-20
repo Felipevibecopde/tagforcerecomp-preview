@@ -8,6 +8,8 @@ mkdir -p $GV
 [ "$1" = "--regen" ] && python tools/build_modules.py
 [ -f $GV/module_index.cpp ] || python tools/build_modules.py
 if [ -n "$TF_VER" ]; then GAMEID=$(python -c "import sys;v=sys.argv[1];print(v[:4]+'-'+v[4:])" "$TF_VER"); EXE_DEF=gen/run_$TF_VER.exe; else GAMEID=ULES-00600; EXE_DEF=gen/run.exe; fi
+# outra versao: as partes reescritas (decomp) que tem todos os enderecos achados compilam com os enderecos dela (decomp/port.h)
+if [ -n "$TF_VER" ]; then python tools/gerar_portes.py "$TF_VER"; export CXXINC="-Igen/portes/$TF_VER"; else export CXXINC=""; fi
 OBJS=""
 for f in $GV/*.c; do
   o="${f%.c}.o"

@@ -1,0 +1,4 @@
+name=Game Speed 1.3x
+author=Felipe
+version=1.1
+description=Runs the whole game 1.3x faster (duels, animations, menus, story mode) while the music and sound effects keep their normal speed and pitch. The speed can be changed in the game window's Mods menu (100% = normal, up to 300%), and "Music at normal speed" can be switched off there.

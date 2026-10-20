@@ -52,7 +52,10 @@ void init(void) {
     }
 }
 int64_t nominal(void) { return g_freq.QuadPart * 1001 / 60000; }   /* 1/59,94 s */
-int64_t step(void) { return g_vb_lock ? g_vb_period * g_vb_k : nominal(); }
+/* velocidade do jogo (mod "Game Speed", API de plugins v6): o passo do limitador vira 1/(59,94 x velocidade) s. Fora do 1x a sincronia com o
+ * monitor fica desligada (o passo nao e mais um multiplo das atualizacoes) */
+double g_speed = 1.0;
+int64_t step(void) { if (g_speed != 1.0) return (int64_t)((double)nominal() / g_speed); return g_vb_lock ? g_vb_period * g_vb_k : nominal(); }
 void vsync_poll(void) {   /* relogio do monitor (DWM) a cada ~0,5 s; decide a sincronia */
     if (g_vb_poll++ % 30) return;
     static const bool off = getenv("TF_RITMO_SEM_FASE") != nullptr;
@@ -62,7 +65,7 @@ void vsync_poll(void) {   /* relogio do monitor (DWM) a cada ~0,5 s; decide a si
         hz = (double)ti.rateRefresh.uiNumerator / ti.rateRefresh.uiDenominator;
         g_vb_period = (int64_t)ti.qpcRefreshPeriod; g_vb_ref = (int64_t)ti.qpcVBlank;
         k = (int)llround((double)nominal() / (double)g_vb_period);
-        lock = k >= 1 && k <= 8 && fabs((double)(g_vb_period * k) - (double)nominal()) < 0.004 * (double)nominal() && (g_mon_hz <= 0 || fabs(hz - g_mon_hz) < 1.5);
+        lock = g_speed == 1.0 && k >= 1 && k <= 8 && fabs((double)(g_vb_period * k) - (double)nominal()) < 0.004 * (double)nominal() && (g_mon_hz <= 0 || fabs(hz - g_mon_hz) < 1.5);
     }
     if (lock != g_vb_lock || k != g_vb_k) {   /* no log so a 1a vez de cada situacao (as telas de carregamento desligam o limitador e religam) */
         static int64_t told_lock; static bool told_free;
@@ -285,6 +288,8 @@ void pace_gpu_done(void) {
     }
 }
 int64_t pace_step_ticks(void) { init(); return step(); }
+void pace_set_speed(double s) { init(); g_speed = s < 0.25 ? 0.25 : s > 4.0 ? 4.0 : s; if (g_speed != 1.0) g_vb_lock = false; }
+double pace_speed(void) { return g_speed; }
 int64_t pace_exit_target(void) { return g_lastx ? g_lastx + step() : 0; }
 void pace_set_sub(int n) { g_sub = n >= 2 ? 2 : 1; }
 /* 120 FPS neste quadro novo? Monitor de 100 Hz ou mais (num de 60 o segundo intermediario de cada atualizacao nunca apareceria) e os quatro

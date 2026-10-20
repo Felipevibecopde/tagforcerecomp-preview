@@ -9,7 +9,7 @@ int main(int argc,char**argv){
   int n=2+rng()%6, lag=1+rng()%4, close_anim=rng()%12; bool blink=rng()%3==0;
   int sel=rng()%n, screen=0, closing=0; std::vector<int> hist; uint32_t prev=0, b=0;
   int wander_until=20+rng()%80, clickf=wander_until, hold=1+rng()%25; int target=rng()%n;
-  int cur=rng()%n; std::vector<std::pair<int,int>> conf; 
+  int cur=rng()%n; std::vector<std::pair<int,int>> conf; int fx=-1, sel_click=-1; 
   for(int f=1;f<400;f++){
     hist.push_back(sel); int ds=hist.size()>(size_t)lag?hist[hist.size()-1-lag]:hist[0];
     if(closing>0)closing--;
@@ -21,12 +21,15 @@ int main(int argc,char**argv){
     int mx=110+rng()%180, my=50+item*30+2+rng()%16;
     bool down=f>=clickf&&f<clickf+hold;
     MuiMouse m{}; m.in_client=m.inside=true; m.mx=mx; m.my=my; m.down[0]=down; m.clicked[0]=(f==clickf);
+    if(f==clickf) sel_click=sel;
     b=mui_mouse(f,m,true,0);
     if(f%2==0){ uint32_t e=b&~prev; prev=b;
-      if(screen==0){ if(e&0x10&&sel>0)sel--; if(e&0x40&&sel<n-1)sel++; if(e&0x4000){conf.push_back({sel,0}); screen=1; closing=close_anim;} }
+      if(screen==0){ if(e&0x10&&sel>0)sel--; if(e&0x40&&sel<n-1)sel++; if(e&0x4000){conf.push_back({sel,0}); screen=1; closing=close_anim; if(fx<0)fx=f;} }
       else if(e&0x4000) conf.push_back({-1,1}); }
   }
   bool ok = conf.size()==1 && conf[0].first==target;
   printf("%d %d n=%d lag=%d anim=%d blink=%d hold=%d alvo=%d conf=",ok,seed,n,lag,close_anim,blink,hold,target);
-  for(auto&c:conf)printf("%d ",c.first); printf("\n");
+  for(auto&c:conf)printf("%d ",c.first);
+  if(getenv("TF_TEMPO")) printf(" tempo=%d dist=%d", fx<0?-1:fx-clickf, sel_click<0?-1:abs(sel_click-target));
+  printf("\n");
 }

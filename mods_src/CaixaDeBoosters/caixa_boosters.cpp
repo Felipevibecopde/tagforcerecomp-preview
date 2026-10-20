@@ -22,8 +22,11 @@
 #include <algorithm>
 #include <stdio.h>
 
+extern "C" { __declspec(dllexport) const char *tfmod_game_ids = "ULES-00600,ULUS-10136"; }   /* enderecos traduzidos por port() */
 static const TfModApi *A;
-static const uint32_t A_SUB = 0x09820de4, A_PACK = 0x09820e4d, A_SEL = 0x09820e5c, A_STOCK = 0x09820eb0, A_HEIGHT = 0x09820e60,
+/* enderecos: escritos como no jogo europeu e traduzidos para a versao rodando (API 8: port; tools/portar_mods.py) */
+static uint32_t P(uint32_t a) { return A && A->version >= 8 ? A->port(a) : a; }
+static uint32_t A_SUB = 0x09820de4, A_PACK = 0x09820e4d, A_SEL = 0x09820e5c, A_STOCK = 0x09820eb0, A_HEIGHT = 0x09820e60,
                       A_SPENT = 0x09820de8, A_PRICE = 0x091e073c, A_DP_STUB = 0x091da478, A_STATE = 0x09820de0, A_FLY = 0x09820ee0,
                       A_TIMER = 0x09820fb8, F_COMPRA = 0x091c72d4, F_DP = 0x091ca5a4, F_LOJA = 0x091c6550;
 static const uint32_t BTN_R = 0x200;
@@ -92,7 +95,7 @@ static int hk_dp(TfCpu *c) {   /* loja_dp_animar_alteracao(delta): a compra em l
  * com o texto 0x1a) e guarda o tipo no nibble baixo de 09820e4c; com o nibble != 0 a loja nao trata botoes e chama FUN_091d5520,
  * que roda a janela (libehsys_39ADDA9F: -1 aberta, 2 = YES), fecha (libehsys_E1139F1A) e zera o nibble. O texto vem do leitor
  * de strings libehsys_E58C0FDC(tabela, indice): durante a montagem ele devolve o nosso texto (UTF-16 na memoria do PSP). */
-static const uint32_t F_JANELA = 0x091d52cc, F_JANELA_RODAR = 0x091d5520, F_STR = 0x08841664, F_JANELA_ATUALIZAR = 0x088493cc,
+static uint32_t F_JANELA = 0x091d52cc, F_JANELA_RODAR = 0x091d5520, F_STR = 0x08841664, F_JANELA_ATUALIZAR = 0x088493cc,
                       F_JANELA_FECHAR = 0x08849ad8, F_SOM = 0x08863294, F_REACAO = 0x091c8fb8, F_PREPARA_COMPRA = 0x091c5eb8,
                       A_JANELA = 0x0998f6bc, A_FLAGS = 0x09820e4c, A_COMPRA_FLAG = 0x09820fa0, A_BOTOES_NOVOS = 0x08903db4 + 0xc;
 static const uint8_t JANELA_MOD = 4;   /* tipo da nossa pergunta no nibble (o jogo so usa 1, 2 e 3) */
@@ -152,7 +155,7 @@ static int hk_janela(TfCpu *c) {   /* FUN_091d5520 (roda a janela aberta): a nos
 
 extern "C" int tfmod_init(const TfModApi *api) {
     if (!api || api->version < 2) return 1;   /* precisa de guest_alloc (API 2) */
-    A = api;
+    A = api; A_SUB = P(A_SUB); A_PACK = P(A_PACK); A_SEL = P(A_SEL); A_STOCK = P(A_STOCK); A_HEIGHT = P(A_HEIGHT); A_SPENT = P(A_SPENT); A_PRICE = P(A_PRICE); A_DP_STUB = P(A_DP_STUB); A_STATE = P(A_STATE); A_FLY = P(A_FLY); A_TIMER = P(A_TIMER); F_COMPRA = P(F_COMPRA); F_DP = P(F_DP); F_LOJA = P(F_LOJA); F_JANELA = P(F_JANELA); F_JANELA_RODAR = P(F_JANELA_RODAR); F_STR = P(F_STR); F_JANELA_ATUALIZAR = P(F_JANELA_ATUALIZAR); F_JANELA_FECHAR = P(F_JANELA_FECHAR); F_SOM = P(F_SOM); F_REACAO = P(F_REACAO); F_PREPARA_COMPRA = P(F_PREPARA_COMPRA); A_JANELA = P(A_JANELA); A_FLAGS = P(A_FLAGS); A_COMPRA_FLAG = P(A_COMPRA_FLAG); A_BOTOES_NOVOS = P(A_BOTOES_NOVOS);
     g_txt = A->guest_alloc(512); if (!g_txt) return 2;
     A->hook(F_COMPRA, hk_compra); A->hook(F_DP, hk_dp); A->hook(F_LOJA, hk_loja); A->hook(F_JANELA_RODAR, hk_janela); A->hook(F_STR, hk_str);
     return 0;

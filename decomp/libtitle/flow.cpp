@@ -525,7 +525,7 @@ static SwapReg reg_LogoStep({"libtitle.LogoStep", MODULE, off(0x08f00744), swap_
 static void swap_LeaveLogoScreen(SwapCtx &x) {
     GuestStack frame(x, 272);
     const uint32_t buffer = frame.addr() + 16;
-    const uint32_t format = x.addr(off(x.callNidKeepRegs(nid::GetLanguage) == 3 ? 0x08f27410 : 0x08f273fc));
+    const uint32_t format = x.addr(off(x.callNidKeepRegs(nid::GetLanguage) == 3 ? PORT(0x08f27410) : PORT(0x08f273fc)));
     x.callNid(nid::BuildSavePath, buffer, 3, format);
     x.callNid(nid::PrepareSaveDialog, buffer, 3, 64);
     const uint32_t edram = x.callImport("sceGeEdramGetAddr");
@@ -574,7 +574,7 @@ static SwapReg reg_DrawTitleItem({"libtitle.DrawTitleItem", MODULE, off(0x08f040
 
 /* ---- small screen helpers ---- */
 namespace {
-constexpr uint32_t kReadyHalf = 0x09B2CBF4;   /* same address as kReadyAddr */
+constexpr uint32_t kReadyHalf = PORT(0x09B2CBF4);   /* same address as kReadyAddr */
 }
 
 /* FUN_08f08084(list): the title screen's drawing step; only step 3 draws (FUN_08f07acc) */

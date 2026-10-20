@@ -6,13 +6,13 @@
 #include <vector>
 #include <random>
 int main(int argc,char**argv){
-  int seed=atoi(argv[1]), modo=atoi(argv[2]); std::mt19937 rng(seed);
+  int seed=atoi(argv[1]), modo=atoi(argv[2]); std::mt19937 rng(seed); const bool hov = modo==3; if(hov) modo=0;
   int lag=3+rng()%4;
   int ncards = modo==0 ? 30+rng()%13 : 4+rng()%3;   // Deck Edit: 30..42 cartas; mao: 4..6
   int cols = modo==0 ? 11 : ncards;
   int sel=rng()%ncards; std::vector<int> hist; uint32_t prev=0;
   int target; do target=rng()%ncards; while(modo==2 && target==sel);
-  int clickf=40+rng()%40, hold=2+rng()%15;
+  int clickf=40+rng()%40, hold=2+rng()%15; int fx=-1, fchega=-1;
   int xs=0, popup_moves=0, cursor_moves=0, at_click=-1;
   for(int f=1;f<520;f++){
     hist.push_back(sel); int ds=hist.size()>(size_t)lag?hist[hist.size()-1-lag]:hist[0];
@@ -30,6 +30,7 @@ int main(int argc,char**argv){
     // mouse: em cima do alvo a partir do clique
     int tx,ty; if(modo==0){ tx=156+28*(target%11)+11; ty=46+34*(target/11)+15; } else { int x0=240-ncards*47/2; tx=x0+47*target+22; ty=245; }
     MuiMouse m{}; m.in_client=m.inside=true; m.mx=f<clickf?10:tx; m.my=f<clickf?10:ty; m.down[0]=f>=clickf&&f<clickf+hold; m.clicked[0]=f==clickf;
+    if(hov){ if(f<clickf){ int k=(f/9)%ncards; m.mx=156+28*(k%11)+11; m.my=46+34*(k/11)+15; } else { m.mx=tx; m.my=ty; } m.down[0]=false; m.clicked[0]=false; }
     uint32_t b=mui_mouse(f,m,true,0);
     if(f==clickf) at_click=sel;
     if(f%2==0){ uint32_t e=b&~prev; prev=b;
@@ -41,12 +42,16 @@ int main(int argc,char**argv){
         if(e&0x40 && modo==0 && r<3){ sel=std::min(ncards-1, sel+11); }
         if(e&0x10 && modo==0 && r>0) sel-=11;
         if(sel!=old) cursor_moves++;
-        if(e&0x4000){ xs++; if(sel!=target) printf("X FORA DO ALVO "); }
+        if(f>=clickf && sel==target && fchega<0) fchega=f; if(sel!=target) fchega=-1;
+        if(e&0x4000){ xs++; if(sel!=target) printf("X FORA DO ALVO "); if(fx<0) fx=f; }
       }
     }
   }
   bool ok;
   if(modo==2) ok = xs==0;   // janelinha: nada de X, e desiste logo
+  else if(hov) ok = xs==0 && sel==target;
   else ok = xs==1 && sel==target;
-  printf("%d %d modo=%d cartas=%d lag=%d de=%d alvo=%d final=%d X=%d passos=%d janela=%d\n",ok,seed,modo,ncards,lag,at_click,target,sel,xs,cursor_moves,popup_moves);
+  printf("%d %d modo=%d%s cartas=%d lag=%d de=%d alvo=%d final=%d X=%d passos=%d janela=%d",ok,seed,modo,hov?"(passando)":"",ncards,lag,at_click,target,sel,xs,cursor_moves,popup_moves);
+  if(getenv("TF_TEMPO")) printf(" tempo=%d", hov ? (fchega<0?-1:fchega-clickf) : (fx<0?-1:fx-clickf));
+  printf("\n");
 }

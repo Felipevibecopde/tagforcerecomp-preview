@@ -1,4 +1,5 @@
 #include "swap.h"
+#include "port.h"
 #include "../runtime/hooks.h"
 #include "../runtime/gameid.h"
 #include <map>
@@ -148,8 +149,21 @@ uint32_t SwapCtx::callImport(const char *name, uint32_t a0, uint32_t a1, uint32_
     fprintf(stderr, "[decomp] module %s has no import %s\n", mod->name, name);
     return 0;
 }
+/* Outra versao do jogo (partes reescritas compiladas com os enderecos dela): uma chamada a um endereco onde a traducao nao achou funcao
+ * (endereco portado errado) nao fecha o jogo; vira 0 e fica no log. Na europeia nao ha checagem (comportamento original). */
+static bool g_foreign_decomp;
+static bool local_fn_exists(const GenModule *m, uint32_t a) {
+    static std::map<const GenModule *, std::set<uint32_t>> fns;
+    auto it = fns.find(m);
+    if (it == fns.end()) { std::set<uint32_t> &st = fns[m]; for (unsigned i = 0; i < m->nfns; i++) st.insert(m->fns[i].addr); it = fns.find(m); }
+    return it->second.count(a) != 0;
+}
 uint32_t SwapCtx::callLocal(uint32_t offset, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5, uint32_t a6, uint32_t a7) {
     c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3; c->r[8] = a4; c->r[9] = a5; c->r[10] = a6; c->r[11] = a7;
+    if (g_foreign_decomp && mod && !local_fn_exists(mod, base + offset)) {
+        static int avisos; if (avisos++ < 30) fprintf(stderr, "[decomp] chamada a 0x%08x (%s) sem funcao nesta versao: ignorada (endereco portado errado?)\n", base + offset, mod->name);
+        c->r[2] = 0; return 0;
+    }
     psp_call(c, base + offset);
     return c->r[2];
 }
@@ -166,23 +180,36 @@ void decomp_register(const Swap &s) { registry().push_back(s); }
 void decomp_init(void) {
     const char *e = getenv("TF_DECOMP");
     if (e && !strcmp(e, "off")) { fprintf(stderr, "[decomp] disabled (TF_DECOMP=off)\n"); return; }
-    /* every swap names a function by its offset in the European build; another version has other code at those offsets */
-    if (game_id_built() != "ULES-00600") { fprintf(stderr, "[decomp] disabled: the swaps are for ULES-00600, this game is %s\n", game_id_built().c_str()); return; }
+    /* every swap names a function by its offset in the European build; another version has other code at those offsets. Exception: a module
+     * whose every address was ported to this version (tools/portar_mods.py -> tools/gerar_portes.py -> decomp/port.h) was compiled with this
+     * version's addresses and can run: today the title menu (libtitle: Graphics, Exit to Desktop) */
+    const bool foreign = game_id_built() != "ULES-00600";
+    g_foreign_decomp = foreign;
+    if (foreign && !TF_PORT_LIBTITLE_OK) { fprintf(stderr, "[decomp] disabled: the swaps are for ULES-00600, this game is %s (no complete address table)\n", game_id_built().c_str()); return; }
+    if (foreign) fprintf(stderr, "[decomp] %s: only the title menu (libtitle) runs, compiled with this version's addresses\n", game_id_built().c_str());
     std::set<std::string> only;
     if (e && strcmp(e, "all")) for (const char *p = e; *p;) { const char *q = strchr(p, ','); std::string n(p, q ? (size_t)(q - p) : strlen(p)); if (!n.empty()) only.insert(n); if (!q) break; p = q + 1; }
     /* TF_DECOMP_SKIP=prefix,prefix: leave out every swap whose name starts with one of the prefixes (bisecting a regression) */
     std::vector<std::string> skip;
+    /* As janelas reescritas do BOOT (decomp/boot: abrir/fechar/ler o pad das janelas) travam o Deck Edit: a mensagem "The card will be moved to
+     * Trunk." nunca fecha e a tela para de responder (confirmado: com TF_DECOMP=off e com TF_DECOMP_SKIP=BOOT o jogo segue). Ficam desligadas por
+     * padrao: o codigo original traduzido do jogo faz o mesmo papel. TF_DECOMP_BOOT=on as liga de novo (para quem for corrigi-las). */
+    if (!getenv("TF_DECOMP_BOOT") && !(e && !strcmp(e, "all"))) { skip.push_back("BOOT."); fprintf(stderr, "[decomp] BOOT window swaps off by default (Deck Edit hang); TF_DECOMP_BOOT=on turns them on\n"); }
     if (const char *k = getenv("TF_DECOMP_SKIP")) for (const char *p = k; *p;) { const char *q = strchr(p, ','); std::string n(p, q ? (size_t)(q - p) : strlen(p)); if (!n.empty()) skip.push_back(n); if (!q) break; p = q + 1; }
     g_verify = getenv("TF_DECOMP_VERIFY") != nullptr;
     unsigned nm; const GenModule *gm = gen_modules(&nm);
     int n = 0;
     for (const Swap &s : registry()) {
         if (!only.empty() && !only.count(s.name)) continue;
+        if (foreign && strncmp(s.name, "libtitle.", 9) != 0) continue;   /* outra versao: so os modulos portados */
         bool skipped = false;
         for (const std::string &k : skip) if (!strncmp(s.name, k.c_str(), k.size())) skipped = true;
         if (skipped) continue;
         for (unsigned i = 0; i < nm; i++) if (!strcmp(gm[i].name, s.module)) {
             const uint32_t addr = gm[i].base + s.offset;
+            if (foreign && !local_fn_exists(&gm[i], addr)) {   /* outra versao: endereco que o jogo dela nao chama como funcao -> fica o codigo original */
+                fprintf(stderr, "[decomp] %s: 0x%08x nao e funcao nesta versao; fica o codigo original\n", s.name, addr); break;
+            }
             g_active[addr] = {s, &gm[i]}; hook_install(addr, swap_hook); n++; break;
         }
     }

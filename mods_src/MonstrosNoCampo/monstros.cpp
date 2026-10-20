@@ -15,8 +15,11 @@
 #include <string.h>
 #include <algorithm>
 
+extern "C" { __declspec(dllexport) const char *tfmod_game_ids = "ULES-00600,ULUS-10136"; }   /* enderecos traduzidos por port() */
 static const TfModApi *A;
-static const uint32_t F_QUADRO = 0x08833fc4, CASAS = 0x09f79d1c, PASSO = 0xfac;
+/* enderecos: escritos como no jogo europeu e traduzidos para a versao rodando (API 8: port; tools/portar_mods.py) */
+static uint32_t P(uint32_t a) { return A && A->version >= 8 ? A->port(a) : a; }
+static uint32_t F_QUADRO = 0x08833fc4, CASAS = 0x09f79d1c, PASSO = 0xfac;
 struct Img { int w = 0, h = 0; std::vector<uint32_t> px; };
 static std::map<uint32_t, Img> g_img;   /* id da carta -> sprite */
 static int g_on = 0, g_escala = 100;     /* experimental: desligado por padrao; tamanho em % */
@@ -68,7 +71,7 @@ static int hk_quadro(TfCpu *) {
 }
 
 extern "C" __declspec(dllexport) int tfmod_init(const TfModApi *api) {
-    A = api;
+    A = api; F_QUADRO = P(F_QUADRO); CASAS = P(CASAS);
     if (A->version < 5) { A->log("Monstros no campo precisa da API 5 (runtime mais novo)"); return 1; }
     cfg_load(); carregar_sprites();
     A->add_toggle(L"&Monsters on the field (experimental)", 0, on_get, on_set);

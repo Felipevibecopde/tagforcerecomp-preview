@@ -67,7 +67,7 @@ static SwapReg reg_FirstMessageText({"libtitle.FirstMessageText", MODULE, off(0x
 static void swap_DrawCardHeader(SwapCtx &x) {
     State &s = state(x);
     uint32_t row = 0;
-    if ((uint16_t)s.arg2 < 6 && x.at<uint32_t>(x.addr(off(0x08f245f8)) + 4 * (uint16_t)s.arg2) == 0x08f1befc) row = (uint32_t)(int32_t)s.arg2 + 77;
+    if ((uint16_t)s.arg2 < 6 && x.at<uint32_t>(x.addr(off(0x08f245f8)) + 4 * (uint16_t)s.arg2) == PORT(0x08f1befc)) row = (uint32_t)(int32_t)s.arg2 + 77;
     x.ret(x.callLocal(fn::DrawTextPanel, x.arg(0), row, 9, 58, 309, 16));
 }
 static SwapReg reg_DrawCardHeader({"libtitle.DrawCardHeader", MODULE, off(0x08f1bec4), swap_DrawCardHeader});
@@ -519,7 +519,7 @@ static SwapReg reg_LimitListScreen({"libtitle.LimitListScreen", MODULE, off(0x08
 /* FUN_08f0082c(index, archiveKey): the text `index` of the current logo's text archive. Texts 118 and 119 are templates that get the name
  * of the card being shown (0x09B2B290) filled in; the result is then in a shared buffer. */
 static void swap_MessageText(SwapCtx &x) {
-    constexpr uint32_t kFormatBuffer = 0x09B2C7F0, kShownCard = 0x09B2B290;
+    constexpr uint32_t kFormatBuffer = PORT(0x09B2C7F0), kShownCard = PORT(0x09B2B290);
     const uint32_t index = x.arg(0), archiveKey = x.arg(1);
     const uint32_t archive = x.callLocal(fn::CurrentLogoResource);
     const uint32_t file = x.callLocal(fn::MessageRecord, archiveKey);

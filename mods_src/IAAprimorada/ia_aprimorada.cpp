@@ -26,9 +26,12 @@
 #include <string>
 #include <wchar.h>
 
+extern "C" { __declspec(dllexport) const char *tfmod_game_ids = "ULES-00600,ULUS-10136"; }   /* enderecos traduzidos por port() */
 static const TfModApi *A;
-static const uint32_t JOG = 0x09f79cec, PASSO = 0xfac, CASAS = 0x09f79d1c;
-static const uint32_t F_STATS = 0x09f56da8, F_ATAQUE = 0x09e74f60, F_MAO = 0x09e762e0, F_MAGIA = 0x09e76a14, F_JOGAR = 0x09e6bad4, F_POSICAO = 0x09e6c4a0,
+/* enderecos: escritos como no jogo europeu e traduzidos para a versao rodando (API 8: port; tools/portar_mods.py) */
+static uint32_t P(uint32_t a) { return A && A->version >= 8 ? A->port(a) : a; }
+static uint32_t JOG = 0x09f79cec, PASSO = 0xfac, CASAS = 0x09f79d1c;
+static uint32_t F_STATS = 0x09f56da8, F_ATAQUE = 0x09e74f60, F_MAO = 0x09e762e0, F_MAGIA = 0x09e76a14, F_JOGAR = 0x09e6bad4, F_POSICAO = 0x09e6c4a0,
                       F_PLANO = 0x09e75258, F_POSDEC = 0x09e6cff0, F_EXEC = 0x09e87760, F_PRED_SIM = 0x09e8133c, F_PRED_DARKHOLE = 0x09e82bd4,
                       F_CARTA_ATK = 0x0884b7ec, F_CARTA_DEF = 0x0884b830, F_CARTA_NIVEL = 0x0884b77c, TAB0 = 0x09f6a478, TAB0_N = 0x3d;
 static uint32_t g_buf;      /* area do PSP para as chamadas */
@@ -40,7 +43,7 @@ static uint32_t u32(uint32_t a) { return *(uint32_t *)A->mem(a); }
 static uint16_t u16(uint32_t a) { return *(uint16_t *)A->mem(a); }
 static void u32w(uint32_t a, uint32_t v) { *(uint32_t *)A->mem(a) = v; }
 static void u16w(uint32_t a, uint16_t v) { *(uint16_t *)A->mem(a) = v; }
-static bool cpu(uint32_t jog) { return u32(0x09f77888 + (jog & 1) * 4) == 1; }
+static bool cpu(uint32_t jog) { return u32(P(0x09f77888) + (jog & 1) * 4) == 1; }
 static bool melhora(uint32_t jog) { return !g_off && cpu(jog) && (g_lado < 0 || g_lado == (int)(jog & 1)); }
 /* Interruptores de PESQUISA (A/B de cada regra): TF_IA_SEM=lista (invocar,posicao,segurar,monstro,darkhole,extras) desliga essas regras (volta o comportamento original do jogo) e
  * TF_IA_SEM_LADO=0/1 so para esse jogador (o outro mantem o plugin completo). Serve para medir na arena se cada regra ajuda ou atrapalha. */
@@ -70,7 +73,7 @@ struct Lado {
 static const int DESCONHECIDO = 1200;           /* valor suposto de um monstro virado do oponente (a IA nao "ve" a carta) */
 static void ler_lado(TfCpu *c, int p, bool oculto, Lado &L) {
     memset(&L, 0, sizeof L);
-    L.lp = (int)u32(JOG + p * PASSO); L.mao = (int)u32(0x09f79cf8 + p * PASSO);
+    L.lp = (int)u32(JOG + p * PASSO); L.mao = (int)u32(P(0x09f79cf8) + p * PASSO);
     for (int s = 0; s < 5; s++) {
         const uint32_t cs = CASAS + p * PASSO + s * 0x14, id = u16(cs) & 0x1fff, f = u32(cs + 0x10);
         Mon &m = L.m[s]; m.id = id; if (!id) continue;
@@ -112,7 +115,7 @@ static bool log_novo(int canal, uint32_t chave) {
 static int stat_carta(TfCpu *c, uint32_t fn, uint32_t id) { return (int)chama(c, fn, id); }
 
 /* ------------------------------------------------------------------ texto da situacao (para o decisor por modelo) */
-static const uint32_t F_CARTA_NOME = 0x0884b46c, F_CARTA_DESC = 0x0884b4b8, F_E_MONSTRO_ = 0x0884c0d8;
+static uint32_t F_CARTA_NOME = 0x0884b46c, F_CARTA_DESC = 0x0884b4b8, F_E_MONSTRO_ = 0x0884c0d8;
 static std::string utf16_guest(uint32_t addr, size_t maxc) {   /* texto UTF-16 da memoria do PSP -> UTF-8 (quebras de linha viram espaco) */
     std::string o;
     for (size_t i = 0; i < maxc; i++) {
@@ -139,7 +142,7 @@ static std::string carta_texto(TfCpu *c, uint32_t id, bool com_efeito) {   /* "N
 }
 static std::string situacao_texto(TfCpu *c, uint32_t jog, const Lado &me, const Lado &opp) {
     const int p = jog & 1, q = 1 - p; char b[200]; std::string t;
-    snprintf(b, sizeof b, "You have %d LP and the opponent has %d LP. Cards left in decks: yours %u, opponent's %u.\n", me.lp, opp.lp, u32(0x09f79cfc + p * PASSO), u32(0x09f79cfc + q * PASSO)); t += b;
+    snprintf(b, sizeof b, "You have %d LP and the opponent has %d LP. Cards left in decks: yours %u, opponent's %u.\n", me.lp, opp.lp, u32(P(0x09f79cfc) + p * PASSO), u32(P(0x09f79cfc) + q * PASSO)); t += b;
     t += "Your hand:"; for (int i = 0; i < me.mao && i < 8; i++) t += (i ? "; " : " ") + carta_texto(c, u16(JOG + p * PASSO + 0x120 + i * 4) & 0x1fff, false);
     t += "\nYour monsters:";
     int k = 0; for (int i = 0; i < 5; i++) if (me.m[i].id) { snprintf(b, sizeof b, " ATK %d/DEF %d, %s", me.m[i].atk, me.m[i].def, me.m[i].defesa ? "defense position" : "attack position"); t += (k++ ? "; " : " ") + nome_carta(c, me.m[i].id) + b; }
@@ -190,7 +193,7 @@ static std::string efeitos_texto(TfCpu *c, const std::vector<uint32_t> &ids) {  
 static int hk_magia(TfCpu *c) {
     const uint32_t jog = A->reg(c, 4), pm = A->reg(c, 5);
     if (!melhora_r(jog, SEM_MONSTRO) || !pm) return 0;
-    const uint32_t mao = JOG + (jog & 1) * PASSO + 0x120, n = u32(0x09f79cf8 + (jog & 1) * PASSO);
+    const uint32_t mao = JOG + (jog & 1) * PASSO + 0x120, n = u32(P(0x09f79cf8) + (jog & 1) * PASSO);
     if (n < 2 || n > 8) return 0;
     Lado me, opp; const Postura po = postura(c, jog, &me, &opp);
     struct Cand { int idx; uint32_t id, modo; int score; int atk, def; } cand[8]; int nc = 0;
@@ -260,7 +263,7 @@ static bool dark_hole_compensa(Lado &me, Lado &opp) {
     if (opp.n == 1 && me.n == 0 && opp.melhor_atk >= 1800 && (me.lp <= 3000 || me.mao <= 1)) return true;   /* ameaca grande e nada para responder */
     return false;
 }
-static int cartas_na_mao_(uint32_t p) { return (int)u32(0x09f79cf8 + (p & 1) * PASSO); }
+static int cartas_na_mao_(uint32_t p) { return (int)u32(P(0x09f79cf8) + (p & 1) * PASSO); }
 static bool ctx_ok(uint32_t a) { return a >= 0x08000000u && a < 0x0a000000u; }
 /* decide se joga uma carta agora: o modelo (se ligado e respondeu) ou a regra do plugin */
 static bool decidir_ativar(TfCpu *c, uint32_t jog, uint32_t id, bool regra) {
@@ -320,20 +323,20 @@ static std::string texto_ataque(TfCpu *c, const Lado &me, const Lado &opp, int p
 /* Ordem dos ataques: o planejador original ordena os atacantes do MAIS FRACO para o mais forte (selecao por chave crescente) e fica com o primeiro que
  * tem um plano. Aqui o mais forte vai primeiro (design decision, 2026-10-06): mais dano garantido se algo interromper a fase de batalha e o monstro maior
  * resolve a ameaca maior. Reaproveita a avaliacao do jogo (F_ATAQUE por atacante, a mesma chamada do original): se o mais forte tem plano, ele vira o plano. */
-static const uint32_t F_PODE_ATACAR = 0x09f5060c;   /* libduel_eng_43595669(jog, casa, 1): o monstro pode atacar agora (filtro do planejador) */
+static uint32_t F_PODE_ATACAR = 0x09f5060c;   /* libduel_eng_43595669(jog, casa, 1): o monstro pode atacar agora (filtro do planejador) */
 static void ataque_mais_forte_primeiro(TfCpu *c, uint32_t jog) {
     Lado me; ler_lado(c, (int)(jog & 1), false, me);
     int ord[5], n = 0;
     for (int i = 0; i < 5; i++) if (me.m[i].id && chama(c, F_PODE_ATACAR, jog, i, 1)) ord[n++] = i;
     for (int a = 1; a < n; a++) { const int v = ord[a]; int b = a - 1; while (b >= 0 && me.m[ord[b]].atk < me.m[v].atk) { ord[b + 1] = ord[b]; b--; } ord[b + 1] = v; }   /* ATK decrescente, estavel */
-    const int atual = (int)u32(0x09f77d88);
+    const int atual = (int)u32(P(0x09f77d88));
     if (atual < 0 || atual > 4) return;
     const uint32_t buf = g_buf + 128;
     for (int k = 0; k < n; k++) {
         const int i = ord[k];
         if (i == atual || me.m[i].atk <= me.m[atual].atk) return;   /* o plano atual ja e do mais forte (ou de um empate) */
         if (chama5(c, F_ATAQUE, jog, (uint32_t)i, 1, buf, 0)) {
-            memcpy(A->mem(0x09f77d80), A->mem(buf), 0x20);
+            memcpy(A->mem(P(0x09f77d80)), A->mem(buf), 0x20);
             if (log_novo(4, (uint32_t)(i * 10 + atual))) A->log("[ia] ordem de ataque: casa %d (ATK %d) antes da casa %d (ATK %d)", i, me.m[i].atk, atual, me.m[atual].atk);
             return;
         }
@@ -349,7 +352,7 @@ static int hk_plano(TfCpu *c) {   /* 09e75258(jog, flag): planejador de ataque; 
     if (ordem) ataque_mais_forte_primeiro(c, jog);
     if (!segurar) return 1;
     Lado me, opp; const Postura po = postura(c, jog, &me, &opp);
-    const int danoCausa = (int)u32(0x09f77d9c), direto = (int)u32(0x09f77d80), atq = (int)u32(0x09f77d88), alvo = (int)u32(0x09f77d8c);
+    const int danoCausa = (int)u32(P(0x09f77d9c)), direto = (int)u32(P(0x09f77d80)), atq = (int)u32(P(0x09f77d88)), alvo = (int)u32(P(0x09f77d8c));
     const bool letal = direto && danoCausa >= opp.lp;
     bool seguro = false; std::string txt;
     const bool ok_atq = atq >= 0 && atq <= 4 && me.m[atq].id;
@@ -405,7 +408,7 @@ static bool quando_brain_control(TfCpu *c, uint32_t jog) {      /* custo 800 PV;
     return opp.nvis >= 1 && opp.melhor_atk >= 1600 && opp.melhor_atk > me.melhor_atk;
 }
 /* cemiterio do jogador p: contador em +0x14, ids (u16) em +0x710 + i*4 */
-static const uint32_t F_E_MONSTRO = 0x0884c0d8;   /* libehsys_E5738C32(id): a carta e um monstro? */
+static uint32_t F_E_MONSTRO = 0x0884c0d8;   /* libehsys_E5738C32(id): a carta e um monstro? */
 static int cem_n(uint32_t p) { return (int)u32(JOG + (p & 1) * PASSO + 0x14); }
 static uint32_t cem_id(uint32_t p, int i) { return u16(JOG + (p & 1) * PASSO + 0x710 + i * 4) & 0x1fff; }
 static int melhor_atk_cemiterio(TfCpu *c, uint32_t p, int *n_monstros = nullptr) {   /* maior ATK entre os monstros do cemiterio */
@@ -496,8 +499,8 @@ static void tabuleiro(TfCpu *c, const char *rotulo) {
     A->log("== %s quadro %llu", rotulo, (unsigned long long)A->frame());
     for (int p = 0; p < 2; p++) {
         const uint32_t base = JOG + p * PASSO;
-        char linha[900]; int n = snprintf(linha, sizeof linha, "J%d LP=%u mao=%u(", p, u32(base), u32(0x09f79cf8 + p * PASSO));
-        for (uint32_t h = 0; h < u32(0x09f79cf8 + p * PASSO) && h < 8; h++) n += snprintf(linha + n, sizeof linha - n, "%s%u", h ? "," : "", u16(JOG + p * PASSO + 0x120 + h * 4) & 0x1fff);
+        char linha[900]; int n = snprintf(linha, sizeof linha, "J%d LP=%u mao=%u(", p, u32(base), u32(P(0x09f79cf8) + p * PASSO));
+        for (uint32_t h = 0; h < u32(P(0x09f79cf8) + p * PASSO) && h < 8; h++) n += snprintf(linha + n, sizeof linha - n, "%s%u", h ? "," : "", u16(JOG + p * PASSO + 0x120 + h * 4) & 0x1fff);
         n += snprintf(linha + n, sizeof linha - n, ") |");
         for (int s = 0; s < 10; s++) {
             const uint32_t cs = CASAS + p * PASSO + s * 0x14; const unsigned id = u16(cs) & 0x1fff;
@@ -555,7 +558,7 @@ static int hk_sonda_plano(TfCpu *c) {
     const uint32_t jog = A->reg(c, 4); const int32_t flag = (int32_t)A->reg(c, 5);
     if (flag >= 0) tabuleiro(c, "plano de ataque");
     A->call_original(c, F_PLANO);
-    if (flag >= 0) A->log("plano_ataque(jog=%u flag=%d) -> %u  dir=%u atacar=%u atq=%u alvo=%u danoSofre=%d danoCausa=%d", jog, flag, A->reg(c, 2), u32(0x09f77d80), u32(0x09f77d84), u32(0x09f77d88), u32(0x09f77d8c), (int)u32(0x09f77d98), (int)u32(0x09f77d9c));
+    if (flag >= 0) A->log("plano_ataque(jog=%u flag=%d) -> %u  dir=%u atacar=%u atq=%u alvo=%u danoSofre=%d danoCausa=%d", jog, flag, A->reg(c, 2), u32(P(0x09f77d80)), u32(P(0x09f77d84)), u32(P(0x09f77d88)), u32(P(0x09f77d8c)), (int)u32(P(0x09f77d98)), (int)u32(P(0x09f77d9c)));
     return 1;
 }
 
@@ -575,14 +578,14 @@ static float valor_prever(const float *x) {
 struct StatCarta { bool monstro; int atk, def; bool armadilha; };
 static const StatCarta &stat_cache(TfCpu *c, uint32_t id) {   /* ATK/DEF/tipo BASE da carta (igual ao banco de cartas do Python), em cache */
     static std::map<uint32_t, StatCarta> cache; auto it = cache.find(id); if (it != cache.end()) return it->second;
-    StatCarta s; s.monstro = chama(c, 0x0884c0d8, id) != 0; s.atk = s.monstro ? (int)chama(c, F_CARTA_ATK, id) : 0; s.def = s.monstro ? (int)chama(c, F_CARTA_DEF, id) : 0;
+    StatCarta s; s.monstro = chama(c, P(0x0884c0d8), id) != 0; s.atk = s.monstro ? (int)chama(c, F_CARTA_ATK, id) : 0; s.def = s.monstro ? (int)chama(c, F_CARTA_DEF, id) : 0;
     if (s.atk < 0 || s.atk > 20000) s.atk = 0; if (s.def < 0 || s.def > 20000) s.def = 0;   /* "?" = 0x1ff*10 */
-    s.armadilha = !s.monstro && chama(c, 0x0884b754, id) == 9;
+    s.armadilha = !s.monstro && chama(c, P(0x0884b754), id) == 9;
     return cache[id] = s;
 }
 static int extrair_lado(TfCpu *c, int p, bool conhecido, float *v) {
     const uint32_t base = JOG + p * PASSO;
-    const int lp = (int)u32(base), hand_n = (int)u32(0x09f79cf8 + p * PASSO), deck_n = (int)u32(0x09f79cfc + p * PASSO);
+    const int lp = (int)u32(base), hand_n = (int)u32(P(0x09f79cf8) + p * PASSO), deck_n = (int)u32(P(0x09f79cfc) + p * PASSO);
     int up_atk = 0, up_def = 0, down = 0, st = 0, st_down = 0, campo = 0, soma_atk = 0, soma_def = 0, max_atk = 0, max_def = 0; float poder = 0;
     for (int sl = 0; sl < 5; sl++) {
         const uint32_t cs = CASAS + p * PASSO + sl * 0x14, id = u16(cs) & 0x1fff; if (!id) continue;
@@ -621,7 +624,7 @@ static int hk_avalia(TfCpu *c) {   /* FUN_09e75cc0(jogador): nota do tabuleiro (
 }
 
 extern "C" __declspec(dllexport) int tfmod_init(const TfModApi *api) {
-    A = api; if (A->version < 3) { A->log("IA Aprimorada precisa da API 3 (runtime mais novo)"); return 1; }
+    A = api; JOG = P(JOG); CASAS = P(CASAS); F_STATS = P(F_STATS); F_ATAQUE = P(F_ATAQUE); F_MAO = P(F_MAO); F_MAGIA = P(F_MAGIA); F_JOGAR = P(F_JOGAR); F_POSICAO = P(F_POSICAO); F_PLANO = P(F_PLANO); F_POSDEC = P(F_POSDEC); F_EXEC = P(F_EXEC); F_PRED_SIM = P(F_PRED_SIM); F_PRED_DARKHOLE = P(F_PRED_DARKHOLE); F_CARTA_ATK = P(F_CARTA_ATK); F_CARTA_DEF = P(F_CARTA_DEF); F_CARTA_NIVEL = P(F_CARTA_NIVEL); TAB0 = P(TAB0); F_CARTA_NOME = P(F_CARTA_NOME); F_CARTA_DESC = P(F_CARTA_DESC); F_E_MONSTRO_ = P(F_E_MONSTRO_); F_PODE_ATACAR = P(F_PODE_ATACAR); F_E_MONSTRO = P(F_E_MONSTRO); if (A->version < 3) { A->log("IA Aprimorada precisa da API 3 (runtime mais novo)"); return 1; }
     g_buf = A->guest_alloc(256); if (!g_buf) return 2;   /* sem a area do PSP as consultas ao jogo escreveriam no endereco 0 */
     decisor_init(A->mod_dir, A->log);
     g_off = getenv("TF_IA_OFF") != nullptr; g_sonda = getenv("TF_IA_SONDA") != nullptr;
@@ -629,7 +632,7 @@ extern "C" __declspec(dllexport) int tfmod_init(const TfModApi *api) {
     if (const char *e = getenv("TF_IA_SEM")) { std::string t = e; struct { const char *n; uint32_t b; } tb[] = {{"invocar", SEM_INVOCAR}, {"posicao", SEM_POSICAO}, {"segurar", SEM_SEGURAR}, {"monstro", SEM_MONSTRO}, {"darkhole", SEM_DARKHOLE}, {"extras", SEM_EXTRAS}, {"ordem", SEM_ORDEM}}; for (auto &x : tb) if (t.find(x.n) != std::string::npos) g_sem |= x.b; A->log("[ia] regras desligadas (pesquisa): %s (lado %d)", e, getenv("TF_IA_SEM_LADO") ? atoi(getenv("TF_IA_SEM_LADO")) : -1); }
     if (const char *e = getenv("TF_IA_SEM_LADO")) g_sem_lado = atoi(e);
     g_valor = getenv("TF_IA_VALOR") != nullptr && atoi(getenv("TF_IA_VALOR")) != 0; if (const char *e = getenv("TF_IA_VALOR_LADO")) g_valor_lado = atoi(e);
-    if (g_valor) A->hook(0x09e75cc0, hk_avalia);
+    if (g_valor) A->hook(P(0x09e75cc0), hk_avalia);
     g_extra = A->guest_alloc(8 * N_REGRAS);
     for (int i = 0; i < N_REGRAS; i++) { u32w(g_extra + i * 8, g_regras[i].id); u32w(g_extra + i * 8 + 4, F_PRED_SIM); }
     A->hook(F_MAGIA, hk_magia); if (!g_sonda) A->hook(F_MAO, hk_mao); A->hook(F_PLANO, g_sonda ? hk_sonda_plano : hk_plano); A->hook(F_POSDEC, hk_posicao_dec);

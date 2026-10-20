@@ -282,7 +282,7 @@ static SwapReg reg_DrawOptionsPanel({"libtitle.DrawOptionsPanel", MODULE, off(0x
 /* FUN_08f0b7ac(list, drawCell): the wide panel across the card list's top, with a frame that pulses (the counter at 0x09B2B28C, steps of 5
  * frames over 0, 1, 2, 1) by growing one pixel on each side */
 static void swap_DrawPulsingPanel(SwapCtx &x) {
-    constexpr uint32_t kRecord = kInfoBox, kPulseCounter = 0x09B2B28C;
+    constexpr uint32_t kRecord = kInfoBox, kPulseCounter = PORT(0x09B2B28C);
     const uint32_t list = x.arg(0), drawCell = x.arg(1);
     Panel &p = x.at<Panel>(kRecord);
     p.x = 4;

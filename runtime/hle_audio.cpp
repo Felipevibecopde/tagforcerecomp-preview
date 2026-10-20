@@ -10,7 +10,8 @@
 #include "ffmpeg_dec.h"
 
 void audio_out_init(void);
-void audio_out_mix(uint64_t *cursor, const int16_t *src, uint32_t frames, bool stereo, int lvol, int rvol);
+void audio_out_mix(uint64_t *cursor, const int16_t *src, uint32_t frames, bool stereo, int lvol, int rvol, bool speed_compress);
+double audio_out_music_factor(void);   /* mod Game Speed: quanto esticar a espera das saidas que esperam (1 = normal) */
 
 /* ---- sceAudio: 8 canais; formato 0 = estereo, 0x10 = mono; volume 0..0x8000 ---- */
 struct AudioCh { uint32_t samples = 1024, fmt = 0; int lvol = 0x8000, rvol = 0x8000; uint64_t cursor = 0; };
@@ -29,14 +30,18 @@ HLE(sceAudioChangeChannelVolume) { if (ARG(0) < 8) { g_ch[ARG(0)].lvol = (int)AR
 HLE(sceAudioGetChannelRestLength) { RET(0); }
 static void audio_out(CPU *c, uint32_t ch, int lvol, int rvol, uint32_t buf, bool block) {
     AudioCh &a = g_ch[ch & 7];
-    if (buf) audio_out_mix(&a.cursor, (const int16_t *)mem_ptr(buf), a.samples, a.fmt != 0x10, lvol, rvol);
+    /* jogo acelerado (mod Game Speed) com a musica na velocidade normal: as saidas que ESPERAM o bloco tocar (a trilha da musica e a dos efeitos)
+     * esperam o tempo real do bloco (tempo virtual x velocidade), entao produzem no ritmo do dispositivo e tocam sem compressao: musica e
+     * efeitos na velocidade e no tom normais enquanto o resto do jogo corre mais rapido. As que nao esperam sao comprimidas na proporcao. */
+    const double mf = audio_out_music_factor();
+    if (buf) audio_out_mix(&a.cursor, (const int16_t *)mem_ptr(buf), a.samples, a.fmt != 0x10, lvol, rvol, !(block && mf != 1.0));
     static const bool dump = getenv("AUDIO_DUMP") != nullptr;   /* depuracao: gen/audio_ch<n>.raw (s16, 44.1 kHz) */
     if (dump && buf) {
         static FILE *f[8]; char fn[64];
         if (!f[ch & 7]) { snprintf(fn, sizeof fn, "gen/audio_ch%u_%s.raw", ch & 7, a.fmt == 0x10 ? "mono" : "stereo"); f[ch & 7] = fopen(fn, "wb"); }
         if (f[ch & 7]) fwrite(mem_ptr(buf), a.fmt == 0x10 ? 2 : 4, a.samples, f[ch & 7]);
     }
-    if (block) k_delay_current((uint64_t)a.samples * 1000000ull / 44100ull);   /* espera a duracao do bloco (tempo virtual) */
+    if (block) k_delay_current((uint64_t)((double)a.samples * 1000000.0 / 44100.0 * mf));   /* espera a duracao do bloco (tempo virtual; x velocidade com a musica normal) */
     RET(0);
 }
 HLE(sceAudioOutputBlocking) { audio_out(c, ARG(0), (int)ARG(1), (int)ARG(1), ARG(2), true); }

@@ -22,6 +22,7 @@ MSYS = r'C:\msys64\ucrt64\bin'
 # translator: everything build_modules.py -> recomp.py imports, plus the module tables
 TOOLS = ['build_modules.py', 'recomp.py', 'allegrex.py', 'pspmod.py', 'elfscan.py', 'imports.py', 'merge.tsv', 'modules.tsv', 'modules_ULUS10136.tsv']
 PY_KEEP = ['python.exe', 'python311.dll', 'python3.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'LICENSE.txt', 'python311.zip']
+DEFAULT_OFF_MODS = ['AceleraJogo']   # game speed: off until the player turns it on
 SKIP_MODS = {'MonstrosNoCampo'}   # prototype that needs art generated from the game; not part of the first release
 RUNTIME = ['ctl', 'main_run', 'gameid', 'host', 'kernel', 'iso', 'isofolder', 'install', 'hle_misc', 'hle_io', 'hle_ge', 'hle_audio', 'modules', 'vfpu',
            'hle_utility', 'display', 'hle_mpeg', 'hle_font', 'launcher', 'text_input', 'diag', 'audio_out', 'raster_pool', 'ffmpeg_dec', 'menu', 'mouse_ui',
@@ -56,12 +57,13 @@ def main():
     pkg = os.path.join(out, 'TagForceRecomp')
     cache = os.path.join(out, 'cache')
     env = dict(os.environ, PATH=MSYS + os.pathsep + os.environ['PATH'])
-    keep_exe = None
-    if '--no-build' in args and os.path.isfile(os.path.join(pkg, 'TagForceRecomp.exe')):   # --no-build reuses the exe: keep it across the clean-up
-        keep_exe = open(os.path.join(pkg, 'TagForceRecomp.exe'), 'rb').read()
+    keep = {}
+    if '--no-build' in args:   # --no-build reuses the exes: keep them across the clean-up
+        for n in ('TagForceRecomp.exe', 'run_ULUS10136.exe'):
+            if os.path.isfile(os.path.join(pkg, n)): keep[n] = open(os.path.join(pkg, n), 'rb').read()
     if os.path.isdir(pkg): shutil.rmtree(pkg)
     os.makedirs(pkg)
-    if keep_exe: open(os.path.join(pkg, 'TagForceRecomp.exe'), 'wb').write(keep_exe)
+    for n, b in keep.items(): open(os.path.join(pkg, n), 'wb').write(b)
     os.chdir(ROOT)
 
     # 1. the generic runtime
@@ -75,6 +77,15 @@ def main():
         run(['g++', '-std=c++17', '-O2', '-DPSP_TRACE', '-DTF_GAME_ID="ULES-00600"', '-Wall', '-Wno-misleading-indentation', '-Iruntime', '-o', exe] + srcs + [res,
              '-static', '-mwindows', '-ldwmapi', '-lgdi32', '-luser32', '-lcomdlg32', '-lshell32', '-lwinmm', '-lsynchronization', '-ld3d11', '-ldxgi', '-ld3dcompiler',
              '-lole32', '-loleaut32', '-luuid', '-lwindowscodecs', '-lgdiplus'], env=env)
+        # 1b. the same generic runtime built for the American version (ULUS-10136): when the player picks a US ISO, TagForceRecomp.exe
+        #     hands the game over to run_ULUS10136.exe (gameid.cpp: game_handoff), which installs it with tools/modules_ULUS10136.tsv.
+        #     --no-us leaves it out.
+        if '--no-us' not in args:
+            exe_us = os.path.join(pkg, 'run_ULUS10136.exe')
+            run([sys.executable, os.path.join('tools', 'gerar_portes.py'), 'ULUS10136'])   # menu reescrito com os enderecos americanos
+            run(['g++', '-std=c++17', '-O2', '-DPSP_TRACE', '-DTF_GAME_ID="ULUS-10136"', '-Wall', '-Wno-misleading-indentation', '-Iruntime', '-Igen/portes/ULUS10136', '-o', exe_us] + srcs + [res,
+                 '-static', '-mwindows', '-ldwmapi', '-lgdi32', '-luser32', '-lcomdlg32', '-lshell32', '-lwinmm', '-lsynchronization', '-ld3d11', '-ldxgi', '-ld3dcompiler',
+                 '-lole32', '-loleaut32', '-luuid', '-lwindowscodecs', '-lgdiplus'], env=env)
     elif not os.path.exists(exe):
         sys.exit('--no-build needs an exe; build once without it')
     if os.path.isfile('yugioh.png'):
@@ -88,6 +99,11 @@ def main():
     # 3. behavior mods
     mods = [d for d in sorted(os.listdir('mods_src')) if os.path.isdir(os.path.join('mods_src', d)) and d not in SKIP_MODS]
     run(['sh', 'tools/build_plugins.sh'] + mods, env=dict(env, MODS_OUT=os.path.join(pkg, 'mods')))
+    for t in glob.glob(os.path.join('tools', 'enderecos_*.txt')):   # tabelas de enderecos dos mods para outras versoes (tools/portar_mods.py)
+        shutil.copy(t, os.path.join(pkg, 'mods'))
+    for off in DEFAULT_OFF_MODS:   # come switched off for whoever downloads (turned on in the launcher's Mods page)
+        d = os.path.join(pkg, 'mods', off)
+        if os.path.isdir(d): open(os.path.join(d, 'disabled'), 'w').write('Mod switched off by default. Turn it on in the launcher (Mods page).\n')
 
     # 4. TinyCC
     tz = fetch(TCC_URL, os.path.join(cache, 'tcc.zip'))

@@ -88,6 +88,13 @@ double audio_out_dump(const wchar_t *path) {
 }
 /* Mistura 'frames' quadros (estereo ou mono, 16 bits) no anel a partir de *cursor (por canal) com volumes 0..0x8000. */
 void audio_out_skip(bool on) { g_skip = on; }
+/* velocidade do jogo (mod "Game Speed"): o jogo produz audio s vezes mais rapido que o dispositivo toca; cada bloco e comprimido na mesma
+ * proporcao (interpolacao linear; o som fica mais agudo, como no avanco rapido de um emulador) para a reserva nao crescer ate descartar */
+static double g_aspeed = 1.0;
+static bool g_music_normal = true;   /* mod Game Speed: musica e efeitos na velocidade normal (as saidas que esperam seguem o tempo real) */
+void audio_out_set_speed(double s) { g_aspeed = s < 0.25 ? 0.25 : s > 4.0 ? 4.0 : s; }
+void audio_out_set_music_normal(bool on) { g_music_normal = on; }
+double audio_out_music_factor(void) { return g_music_normal ? g_aspeed : 1.0; }
 namespace {
 /* Controle de reserva por canal: o ritmo medio do jogo (tempo virtual -> real) nunca bate exatamente com o relogio do dispositivo (alguns decimos de %
  * por causa das esperas); sem controle a reserva encolhe ate zerar (engasgo) ou cresce ate descartar. */
@@ -99,7 +106,7 @@ ReserveCtl *ctl_for(const uint64_t *cursor) {
 }
 const uint64_t RESERVE_TARGET = 2600;   /* reserva alvo a frente do ponto de leitura (~59 ms) */
 }
-void audio_out_mix(uint64_t *cursor, const int16_t *src, uint32_t frames, bool stereo, int lvol, int rvol) {
+void audio_out_mix(uint64_t *cursor, const int16_t *src, uint32_t frames, bool stereo, int lvol, int rvol, bool speed_compress) {
     if (!g_on || !src || g_skip || !frames) return;
     std::lock_guard<std::mutex> lk(g_mx);
     ReserveCtl *ctl = ctl_for(cursor);
@@ -112,15 +119,16 @@ void audio_out_mix(uint64_t *cursor, const int16_t *src, uint32_t frames, bool s
         *cursor = g_rd + RESERVE_TARGET;
         if (ctl) ctl->ema = (double)RESERVE_TARGET;
     }
-    uint32_t out = frames;
+    const uint32_t base = (g_aspeed == 1.0 || !speed_compress) ? frames : std::max<uint32_t>(1, (uint32_t)std::lround((double)frames / g_aspeed));
+    uint32_t out = base;
     if (ctl) {
         /* correcao proporcional e minima (<= ~0,4%, zona morta de ~400 quadros): so absorve o desvio de ritmo; correcoes grandes ou que ligam e
          * desligam por bloco soam como tremor de altura (o som "perde velocidade") */
         if (ctl->ema == 0.0) ctl->ema = (double)RESERVE_TARGET;
         ctl->ema += 0.05 * ((double)((long long)*cursor - (long long)g_rd) - ctl->ema);
-        const int dmax = std::max(1, (int)(frames / 256));
+        const int dmax = std::max(1, (int)(base / 256));
         const int d = std::max(-dmax, std::min(dmax, (int)std::lround(((double)RESERVE_TARGET - ctl->ema) / 1200.0)));
-        out = (uint32_t)((int)frames + d);
+        out = (uint32_t)std::max(1, (int)base + d);
     }
     if (*cursor + out > g_rd + RING - 2 * BUFF) return;            /* muito a frente: descarta */
     for (uint32_t f = 0; f < out; f++) {

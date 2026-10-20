@@ -103,7 +103,7 @@ static void swap_EnterCardListScreen(SwapCtx &x) {
     box.drawCell = 0;
     const uint32_t archive = x.callLocal(fn::CurrentLogoResource);
     x.callLocal(fn::NewOptionsBlock, state(x).heap, archive, 0);
-    memset(x.mem(0x09B2B014), 0, 0x4C);   /* a 76-byte block in front of the card list tables (not understood yet) */
+    memset(x.mem(PORT(0x09B2B014)), 0, 0x4C);   /* a 76-byte block in front of the card list tables (not understood yet) */
     memset(x.mem(kCardListFilters), 0, 0x1510);
     x.callLocal(fn::SlotLoad, 10, 2, 0, 479);
     x.callLocal(fn::ClearCardFlags);
@@ -552,7 +552,7 @@ static SwapReg reg_ClearMenuInput({"libtitle.ClearMenuInput", MODULE, off(0x08f0
  * two numbers). kind 1 = one button (OK), 2 = two buttons (yes / no), 3 = no button; `answer` picks the button that starts selected. */
 static void swap_OpenDialog(SwapCtx &x) {
     const uint32_t message = x.arg(0), kind = x.arg(1), answer = x.arg(2);
-    constexpr uint32_t kFormatBuffer = 0x09B2C7F0;
+    constexpr uint32_t kFormatBuffer = PORT(0x09B2C7F0);
     const uint32_t w = kWindowA;
     Window &window = x.at<Window>(w);
     x.callLocal(fn::InitWindow, w);

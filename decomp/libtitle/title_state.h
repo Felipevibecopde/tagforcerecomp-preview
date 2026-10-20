@@ -2,12 +2,13 @@
  * one block of globals in the game's data area (not in the module image), found by reading libtitle's generated code. The block is 13512
  * bytes: the flow counters first, then the three dialog windows, the panel set, the two menu lists and the flags of the screens. */
 #pragma once
+#include "../port.h"   /* PORT(): endereco europeu -> versao deste executavel */
 #include <stdint.h>
 #include <stddef.h>
 
 namespace libtitle {
 
-constexpr uint32_t kStateAddr = 0x09B29730;
+constexpr uint32_t kStateAddr = PORT(0x09B29730);
 /* The screens of the title flow that are understood (State::screen); the others are numbers in the tables of Tick and SwitchScreen. */
 enum Screen : int16_t {
     kScreenTitle = 5,        /* the title / attract screen */
@@ -484,16 +485,16 @@ constexpr uint32_t kCardWork = kStateAddr + offsetof(State, cardWork);
 constexpr uint32_t kTitleList = kStateAddr + offsetof(State, titleList), kTitleList2 = kStateAddr + offsetof(State, titleList2);
 constexpr uint32_t kMenuColours = kStateAddr + offsetof(State, menuColour), kColourFade = kStateAddr + offsetof(State, colourFade);
 constexpr uint32_t kLaunchInfo = kStateAddr + offsetof(State, launch);
-constexpr uint32_t kCardListTables = 0x09B2B29C, kCardListFilters = 0x09B2B294, kFreeDuelSettings = 0x09B2AFC4;
-constexpr uint32_t kOptionsBlockPtr = 0x09B2CF30;   /* u32: pointer to the OptionsWork block */
+constexpr uint32_t kCardListTables = PORT(0x09B2B29C), kCardListFilters = PORT(0x09B2B294), kFreeDuelSettings = PORT(0x09B2AFC4);
+constexpr uint32_t kOptionsBlockPtr = PORT(0x09B2CF30);   /* u32: pointer to the OptionsWork block */
 
 /* other globals the small functions touch */
-constexpr uint32_t kFlagsAddr = 0x09B2C7D8;               /* byte: bits 0-1 = fade mode, bit 2 = flow locked */
-constexpr uint32_t kFlagsTouchedAddr = 0x09B2CBF2;        /* u16, cleared with the fade mode */
-constexpr uint32_t kLogoIndexAddr = 0x09B2C7A4;           /* u32 */
-constexpr uint32_t kLogoTableAddr = 0x09B2C7BC;           /* u32 per index */
-constexpr uint32_t kLogoBlockAddr = 0x09B2C7EC;           /* u32: the 5 MB block taken while a logo screen runs */
-constexpr uint32_t kTextBox = 0x09B2CBF8;                 /* TitleTextBox */
+constexpr uint32_t kFlagsAddr = PORT(0x09B2C7D8);               /* byte: bits 0-1 = fade mode, bit 2 = flow locked */
+constexpr uint32_t kFlagsTouchedAddr = PORT(0x09B2CBF2);        /* u16, cleared with the fade mode */
+constexpr uint32_t kLogoIndexAddr = PORT(0x09B2C7A4);           /* u32 */
+constexpr uint32_t kLogoTableAddr = PORT(0x09B2C7BC);           /* u32 per index */
+constexpr uint32_t kLogoBlockAddr = PORT(0x09B2C7EC);           /* u32: the 5 MB block taken while a logo screen runs */
+constexpr uint32_t kTextBox = PORT(0x09B2CBF8);                 /* TitleTextBox */
 constexpr uint32_t kTextBoxWindow = kTextBox + 8;         /* its window set, followed by the style record (Window fields up to +0xC4) */
 /* Sprite records in the module image (read-only data of libtitle).
  * LogoSprite: 152-byte records at kLogoSprites. Each names the image it comes from (the first is "konami_logo.gim"; the logo screens, the
@@ -507,9 +508,9 @@ struct LogoSprite {
     int16_t mirrorU, mirrorV;                 /* +148 */
 };
 static_assert(sizeof(LogoSprite) == 152 && offsetof(LogoSprite, x) == 132 && offsetof(LogoSprite, mirrorU) == 148, "LogoSprite layout");
-constexpr uint32_t kLogoSprites = 0x08f25c40;
-constexpr uint32_t kLogoScreenSprites = 0x08f27424;   /* two u32: the LogoSprite numbers the logo screen draws */
-constexpr uint32_t kListRowSprites = 0x08f27440;      /* three u32: the LogoSprite numbers of a list row (left cap, stretched middle, right cap) */
+constexpr uint32_t kLogoSprites = PORT(0x08f25c40);
+constexpr uint32_t kLogoScreenSprites = PORT(0x08f27424);   /* two u32: the LogoSprite numbers the logo screen draws */
+constexpr uint32_t kListRowSprites = PORT(0x08f27440);      /* three u32: the LogoSprite numbers of a list row (left cap, stretched middle, right cap) */
 
 /* FramePart: 22-byte records at kFrameParts, the pieces of the window frames and the small menu decorations (the cursor arrow, the name
  * plate): u/v is where the piece sits in its sheet, width/height its size. Each frame kind is a run of 1, 3, 9 or 12 consecutive records
@@ -519,6 +520,6 @@ struct FramePart {
     int16_t u, v, width, height, mirrorU, mirrorV;
 };
 static_assert(sizeof(FramePart) == 22, "FramePart layout");
-constexpr uint32_t kFrameParts = 0x08f27838;
+constexpr uint32_t kFrameParts = PORT(0x08f27838);
 
 }  // namespace libtitle
